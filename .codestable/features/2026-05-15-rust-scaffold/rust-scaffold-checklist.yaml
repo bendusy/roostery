@@ -8,113 +8,113 @@ steps:
 
   - action: "Rust 工作台建立：写 workspace 根 Cargo.toml + rust-toolchain.toml；建 crates/roostery/Cargo.toml + src/main.rs + src/lib.rs"
     exit_signal: "cargo build 成功 0 warning；cargo run -- --version 输出 'roostery 0.0.0 (rust)'；cargo test --all 输出 '0 passed; 0 failed'"
-    status: pending
+    status: done
 
   - action: ".gitignore 加 Rust artifact（target/、**/*.rs.bk）"
     exit_signal: "cat .gitignore 含 target/"
-    status: pending
+    status: done
 
   - action: "写 .github/workflows/ci.yml（fmt / clippy / test 三 job，ubuntu-latest）"
     exit_signal: "本地 cargo fmt --all --check + cargo clippy --all-targets --all-features -- -D warnings + cargo test --all 三命令全绿"
-    status: pending
+    status: done
 
   - action: "文档同步：README.md 加 Rust 期 notice；CLAUDE.md 切换为 Rust 期叙述（commands 改 cargo，模块路径指向 crates/roostery/，Python 内容指向 legacy/python/）；ARCHITECTURE.md 模块映射改为 Rust 路径"
     exit_signal: "grep -rE 'src/roostery/|pip install|pytest' CLAUDE.md README.md .codestable/architecture/ARCHITECTURE.md 仅在 legacy/historical 语境出现；head -5 README.md 含 'Rust 重写中' 类似 notice"
-    status: pending
+    status: done
 
   - action: "本地预跑 + scaffold commit + 推 CI 验证"
     exit_signal: "本地 fmt/clippy/test 全绿；推 commit 到 main 或建 PR 后 GitHub Actions fmt/clippy/test 三 job 全绿"
-    status: pending
+    status: done
 
 checks:
   - item: "workspace 根 Cargo.toml 含 [workspace] resolver=2 + members=['crates/roostery']"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "rust-toolchain.toml channel='stable' + components=['clippy', 'rustfmt']"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "crates/roostery/Cargo.toml package.name='roostery'，[[bin]] name='roostery'，无 [dependencies] 上层 crate"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "src/lib.rs 含 pub const VERSION 和 pub const SCHEMA_VERSION（u32 = 1）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "src/main.rs 实现 --version / -V flag 行为，无参数时输出含 GitHub URL"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "archive 提交独立于 scaffold 提交（git log 显示两次独立 commit）"
     source: 编排骨架
-    status: pending
+    status: passed
 
   - item: "文档同步在 Rust 工作台跑通后才做（CLAUDE.md 已切换时 cargo build 应已成功）"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "挂载点 1：仓库根含 Cargo.toml workspace 根 + rust-toolchain.toml"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 2：crates/roostery/ 目录存在且 build 成功"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 3：legacy/python/ 目录存在且含 archive 内容 + README.md"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 4：.github/workflows/ci.yml 存在且 CI 触发"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 5：.gitignore 含 target/"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "范围守护：crates/roostery/Cargo.toml 不含 tokio / serde / clap / chrono 上层依赖（Phase 0 不引）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：crates/roostery/src/bin/ 不存在（shim 是 Phase 2）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：README.md ≤55 行（仅加 notice 不做完整改写，完整改写归 legacy-removal）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：npm view roostery version 仍 '0.0.0'，pip show roostery 仍显示 0.0.0（占位发布未动）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：.codestable/ 内容未被本 feature 改动（除已存在的 architecture/requirements/roadmap/brainstorms/attention.md/features）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：legacy/python/src/roostery/ 内容仅 archive 未修改（git mv 不改 content）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "验收场景：cargo run -- --version 输出 'roostery 0.0.0 (rust)' 且 exit 0"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：cargo build / fmt --check / clippy -D warnings / test --all 全绿"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：ls src 2>&1 返回 'No such file or directory'，git ls-files | grep '^src/roostery/' 空"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：git log --follow legacy/python/src/roostery/journal.py 能追溯到原 src/ 历史"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：GitHub Actions 三个 job 全绿"
     source: 验收场景
-    status: pending
+    status: passed

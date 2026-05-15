@@ -301,9 +301,10 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 1. **`rust-scaffold`** — Cargo workspace + Python 整体归档进 `legacy/python/` + CI 骨架（`cargo fmt --check` / `clippy -D warnings` / `cargo test`）
    - 所属模块：A（含 Python 归档作业，跨模块）
    - 依赖：无
-   - 状态：planned
+   - 状态：**done**（2026-05-15）
    - 主要支持的 req：—（基础设施）
-   - 备注：Phase 0；完成后 `cargo run -- --version` 输出 `roostery 0.0.0 (rust)`；删 `pyproject.toml` / `src/roostery.egg-info` / `index.js` / `package.json`（占位放弃，npm 名保留）
+   - 对应 feature：`2026-05-15-rust-scaffold`（commit `511dce3` / CI run #25912520438 全绿）
+   - 备注：Phase 0；完成后 `cargo run -- --version` 输出 `roostery 0.0.0 (rust)`；删 `pyproject.toml` / `src/roostery.egg-info` / `index.js` / `package.json`（占位放弃，npm + PyPI namespace 已 reserved）
 
 2. **`core-redact`** — `redact` 模块，敏感字段脱敏
    - 所属模块：A

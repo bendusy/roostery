@@ -5,10 +5,10 @@ items:
   - slug: rust-scaffold
     description: Cargo workspace + Python 整体归档进 legacy/python/ + CI 骨架（fmt/clippy/test）
     depends_on: []
-    status: in-progress
+    status: done
     feature: 2026-05-15-rust-scaffold
     minimal_loop: false
-    notes: "Phase 0；完成后 cargo run -- --version 输出 roostery 0.0.0 (rust)；删 pyproject.toml / index.js / package.json（npm + PyPI namespace 已 reserved 不依赖本地 manifest）"
+    notes: "Phase 0；完成后 cargo run -- --version 输出 roostery 0.0.0 (rust)；删 pyproject.toml / index.js / package.json（npm + PyPI namespace 已 reserved 不依赖本地 manifest）。Accepted 2026-05-15（commit 511dce3，CI run #25912520438）"
 
   - slug: core-redact
     description: redact 模块，敏感字段脱敏；纯函数无 I/O
