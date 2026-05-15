@@ -32,6 +32,9 @@
 | Trace | `trace_id` / `depth` / `parent_event_id` 链，loop 保护用（见 roadmap §4.5） |
 | Budget | 调用次数与成本上限 |
 | Roost | 项目名含义——agent 来此栖息，离开时带着自己的痕迹走（不锁定在某一协作平面） |
+| `MASK` | redact 模块的脱敏占位字符串，固定为 `"***"`（`crates/roostery/src/redact.rs`，Phase 1 落地） |
+| `SENSITIVE_KEYS` | redact 模块默认敏感字段名列表（11 个：7 个 Python parity + 4 个业界扩展 `password` / `secret` / `cookie` / `private_key`），归一化后比较 |
+| Logging-boundary scrubber | redact 模块的定位：对**已 flow 到 logging 边界的数据**做脱敏。与 `redact::Secret<T>` / `secrecy::SecretString` 等 in-memory wrapper crate 不同层——本项目本 phase 不引入这类 wrapper |
 
 ### State ownership
 
@@ -53,7 +56,16 @@
 
 ### Module A · 基础工具（Phase 1）
 纯数据操作。`schema` 常量、`redact`（敏感字段脱敏）、`remoterefs`（regex 抽 `doc_token` / `record_id`）。
-- 子 feature：`rust-scaffold` / `core-redact` / `core-remoterefs`
+
+**redact 模块**（已落地，commit `1e392e5`，Phase 1）：
+
+- 公开 API：`scrub_value(&Value) -> (Value, Vec<String>)`、`scrub_argv(&[String]) -> (Vec<String>, Vec<String>)`、`scrub_text(&str) -> String`，全部纯函数返回 owned 新值不修改入参
+- 公开常量：`MASK = "***"`、`SENSITIVE_KEYS: &[&str]` 11 entries（见术语表）
+- audit path 格式：argv 用 `argv[N]`，结构化用 RFC 6901 JSON Pointer
+- **下游使用约束**：`journal-core`（Phase 1）/ `lark-cli-shim`（Phase 2）/ `bot-task-writer`（Phase 5）等所有写 journal 的模块**必经此模块脱敏**（见 roadmap §4.2 JournalEntry schema 契约）
+- 定位：logging-boundary scrubber，**不替代** in-memory secret wrapper（`Secret<T>` 类）；未来 Module D Config 持有 secret 字段时单独引 `redact` crate
+
+- 子 feature：`rust-scaffold` / **`core-redact`（done）** / `core-remoterefs`
 
 ### Module B · 本地审计 / Journal（Phase 1）
 本地 jsonl audit / replay。`JournalEntry` schema 是 `portable-by-default` req 的契约载体（公开、稳定、可移植）。
@@ -118,3 +130,4 @@ Feishu Base 作为索引层（**非** source of truth）。
 4. **lark-cli 版本 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke
 5. **smoke 是升级后的 gate**。任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行
 6. **代码-文档优先级**：Python baseline 与最新文档冲突时**以文档为准**（见 attention.md）。Rust port 不机械 1:1 翻译，失配点记观察项
+7. **redact 模块函数纯且幂等**：`redact::scrub_value` / `scrub_argv` / `scrub_text` 不修改入参（接 `&` 借用返回 owned 新值）；对已含 `MASK` 的输入再跑结果等价；audit path 顺序 = 遍历顺序（Phase 1 落地，commit `1e392e5`）

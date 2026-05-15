@@ -309,9 +309,10 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 2. **`core-redact`** — `redact` 模块，敏感字段脱敏
    - 所属模块：A
    - 依赖：`rust-scaffold`
-   - 状态：planned
+   - 状态：**done**（2026-05-15）
    - 主要支持的 req：`portable-by-default`（脱敏是 journal 敏感处理基础）
-   - 备注：Phase 1；Python 版作 reference，行为以本 roadmap 接口契约和 portable-by-default 边界为准
+   - 对应 feature：`2026-05-15-core-redact`（commit `1e392e5` / CI run #25914996799 全绿）
+   - 备注：Phase 1；Python 版作 reference，SENSITIVE_KEYS 11 个（Python 7 + 扩展 4：password/secret/cookie/private_key）
 
 3. **`core-remoterefs`** — `remoterefs` 模块，regex 从 lark-cli stdout 抽 `doc_token` / `record_id` 等
    - 所属模块：A
