@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Editors
+.vscode/
+.idea/
+.DS_Store
+
+# Local
+.env
+.envrc
+*.log
