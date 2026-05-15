@@ -1,0 +1,120 @@
+feature: 2026-05-15-core-redact
+created: 2026-05-15
+
+steps:
+  - action: "模块骨架 + 依赖：建 crates/roostery/src/redact.rs（含 MASK、SENSITIVE_KEYS（11 个）、三个函数签名 todo!()），lib.rs 加 pub mod redact;，Cargo.toml 加 serde_json + regex 依赖"
+    exit_signal: "cargo build 成功；cargo test --all 仍 0 passed 0 failed；SENSITIVE_KEYS.len() == 11 可在测试中断言"
+    status: done
+
+  - action: "scrub_argv 实现 + 单测：三种 pattern (--flag value / --flag=value / --header) + key normalization；单测覆盖 S2.1-S2.7"
+    exit_signal: "cargo test redact::tests::scrub_argv 至少 3 个 case 通过；clippy/fmt 不报错"
+    status: done
+
+  - action: "scrub_text 实现 + 单测：JSON 字符串 form regex + YAML 行 form regex；单测覆盖 S3.1-S3.5"
+    exit_signal: "cargo test redact::tests::scrub_text 至少 2 个 case 通过"
+    status: done
+
+  - action: "scrub_value 实现 + 单测：递归走 serde_json::Value，按 normalized key 命中 SENSITIVE_KEYS 替换 value，记 RFC 6901 JSON Pointer audit path；单测覆盖 S1.1-S1.8"
+    exit_signal: "cargo test redact::tests::scrub_value 至少 3 个 case 通过；S1.8 验证 4 个扩展 keys 全部触发"
+    status: done
+
+  - action: "集成验证：cargo test --all + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 三命令全绿；提交并推 CI"
+    exit_signal: "本地三命令全绿；推 commit 后 GitHub Actions fmt/clippy/test 三 job 全绿"
+    status: pending
+
+checks:
+  - item: "redact.rs 含 pub const MASK: &str = \"***\";"
+    source: 名词契约
+    status: pending
+
+  - item: "redact.rs 含 pub const SENSITIVE_KEYS: &[&str] 含 11 个 key（Python parity 7 + 扩展 4）"
+    source: 名词契约
+    status: pending
+
+  - item: "scrub_value 签名：(&serde_json::Value) -> (serde_json::Value, Vec<String>)"
+    source: 名词契约
+    status: pending
+
+  - item: "scrub_argv 签名：(&[String]) -> (Vec<String>, Vec<String>)"
+    source: 名词契约
+    status: pending
+
+  - item: "scrub_text 签名：(&str) -> String"
+    source: 名词契约
+    status: pending
+
+  - item: "三个函数都不修改入参（&borrow，返回 owned 新值）— 不变量 1"
+    source: 流程级约束
+    status: pending
+
+  - item: "幂等性：对已含 MASK 的输入再跑 scrub_value 结果等价 — 不变量 2 / S1.7"
+    source: 流程级约束
+    status: pending
+
+  - item: "audit path 顺序 = 遍历顺序（structural）— 不变量 4"
+    source: 流程级约束
+    status: pending
+
+  - item: "纯函数无 panic / 无 Result 返回；空输入返回空输出 — 错误语义"
+    source: 流程级约束
+    status: pending
+
+  - item: "挂载点 1：crates/roostery/src/redact.rs 文件存在且包含模块代码"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 2：crates/roostery/src/lib.rs 含 pub mod redact; 暴露语句"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 3：crates/roostery/Cargo.toml [dependencies] 含 serde_json + regex"
+    source: 挂载点
+    status: pending
+
+  - item: "范围守护：grep -E 'scrub_bytes|scrub_path|fn config' redact.rs → 无（不实现 bytes/配置驱动）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep 'Config' redact.rs → 无（不引入 Config struct）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'tokio|async' redact.rs → 无（同步纯函数）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'once_cell|secrecy|redactable|^redact = ' Cargo.toml → 无（不引第三方 redaction crate）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：wc -l crates/roostery/src/redact.rs < 500（design §3.2 calibration 修订后阈值）"
+    source: 范围守护
+    status: pending
+
+  - item: "验收场景 S1.1-S1.8：scrub_value 8 个 case 全部通过（结构化数据 + 嵌套 + Array + primitive + 大小写 + 幂等 + 11 keys 全覆盖）"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S2.1-S2.7：scrub_argv 7 个 case 全部通过（三种 pattern + 简写 + non-sensitive + 边界）"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S3.1-S3.5：scrub_text 5 个 case 全部通过（JSON / YAML / 大小写 / 无敏感 / 空）"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S4.1：cargo test --all 全绿，redact 模块至少 5 个测试"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S4.2-S4.3：cargo clippy --all-targets -- -D warnings + cargo fmt --check 通过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S4.4：SENSITIVE_KEYS.len() == 11"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景：GitHub Actions 三个 job 全绿"
+    source: 验收场景
+    status: pending
