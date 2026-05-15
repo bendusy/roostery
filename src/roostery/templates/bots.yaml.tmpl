@@ -1,0 +1,45 @@
+# feishu_hub M3.C — bots.yaml 配置示例
+#
+# 每条 = 一个 bot 角色，绑定一个 lark-cli profile（app_id）。
+# daemon 启动时通过 --role 或 --app-id 选其中一条。
+#
+# 必填字段：app_id / role / mention_alias / runner / default_cwd / prompt_template
+# 可选字段：reply_template / chat_whitelist / next_bot_mention
+#
+# mention_alias = 该 bot 在飞书群里的**显示名**（用 @ 触发匹配）。
+# 改 bot 名后请同步改这里——本配置就是事实源，不动态拉。
+
+bots:
+  - app_id: cli_a9449f8a2f799bdb
+    role: reviewer
+    mention_alias: Hermes     # 改 bot 显示名时同步改
+    runner: cc_headless
+    default_cwd: /Users/ben/Projects/GenericAgent
+    # 跨机 relay_task 统一身份写手（双机/多机部署时必须设；同 app_id 各机都要装 profile）
+    # 不设 = 用 bot 自己身份建 task，跨 bot 各自一个 task，无法收敛
+    relay_writer_app_id: cli_a9449f8a2f799bdb
+    prompt_template: |
+      请审核以下消息内容，给出 ✅ 通过 / ❌ 不通过 / ⚠️ 建议改进，简述理由：
+      ---
+      {message}
+    reply_template: |
+      审核结果：
+
+      {result}
+    # 完成后 @下一个 bot 接力（可选）
+    # next_bot_mention: "@沉淀Bot"
+    # 限定监听哪些群（空=所有）
+    # chat_whitelist:
+    #   - oc_e6e50b04fc21414d6364036b23438af9   # M3.C POC 测试群
+
+  # - app_id: cli_a94ec377a3789bb6
+  #   role: scribe
+  #   mention_alias: 沉淀Bot
+  #   runner: cc_headless
+  #   default_cwd: /Users/ben/Projects/GenericAgent
+  #   relay_writer_app_id: cli_a9449f8a2f799bdb   # 跟 reviewer 同一个写手，跨 bot 收敛 task
+  #   prompt_template: |
+  #     请把以下审核后的内容沉淀到飞书 docs：
+  #     ---
+  #     {message}
+  #   reply_template: "已写入飞书文档：{result}"

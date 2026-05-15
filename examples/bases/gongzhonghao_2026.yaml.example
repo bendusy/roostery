@@ -1,0 +1,32 @@
+role: 公众号-2026
+base_token: YOUR_BASE_TOKEN_HERE
+table_id: YOUR_TABLE_ID_HERE
+
+stage_to_bot:
+  "📋 选题": selector_bot
+  "✏️ 草稿": drafter_bot
+  "📝 修订": editor_bot
+  "✅ 发布": publisher_bot
+
+output_mirror:
+  drafter_bot: 关联文档
+  publisher_bot: 关联文档
+
+initial_stage: "📋 选题"
+
+nl_keywords:
+  strong:
+    - 公众号
+    - 写一篇
+    - 文章
+  weak:
+    - 内容
+    - 发布
+
+digest:
+  decision_stages:
+    - "📝 修订"
+    - "✅ 发布"
+  product_fields:
+    - 产物
+    - 关联文档

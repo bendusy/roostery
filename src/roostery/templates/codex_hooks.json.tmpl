@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FEISHU_HUB_AGENT=codex {{HOOK_SCRIPT}}",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

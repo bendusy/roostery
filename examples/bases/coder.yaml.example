@@ -1,0 +1,14 @@
+role: Coder
+base_token: YOUR_BASE_TOKEN_HERE
+table_id: YOUR_TABLE_ID_HERE
+
+stage_to_bot:
+  "🎯 待办": planner_bot
+  "🔬 设计": architect_bot
+  "🛠️ 实现": dev_bot
+  "🧪 测试": tester_bot
+  "👀 Review": reviewer_bot
+
+output_mirror:
+  dev_bot: 关联 PR/Commit
+  reviewer_bot: 关联 PR/Commit

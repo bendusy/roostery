@@ -1,0 +1,53 @@
+# feishu_hub.dispatcher 默认规则
+#
+# 拷贝到 ~/.feishu_hub/rules.yaml 后编辑。
+# 字段：docs/FEISHU_HUB_DISPATCHER_DESIGN.md §5；result_writeback 见 loop._writeback。
+
+version: 1
+rules:
+  # S1：CC 会话结束 → Codex 评审今日 diff
+  - name: cc_session_end_review
+    when:
+      event_type: agent.session_end
+      actor.agent: cc
+      cwd_glob: "/Users/*/Projects/*"
+    action:
+      runner: codex_exec
+      prompt: |
+        请评审 {{cwd}} 的最近 5 次提交：bug、安全、测试覆盖。
+        用 `git diff HEAD~5..HEAD` 查看变更，给具体行号与修复建议。
+      timeout_s: 600
+      budget: {max_calls: 30, max_cost_cents: 1000}
+      result_writeback:
+        kind: feishu_im
+        prefix: "🤖 [Codex 评审] "
+        on: both
+
+  # S3：GA 收到 IM `/research X` → CC headless 调研 → 结果回飞书
+  - name: ga_slash_research_to_cc
+    when:
+      event_type: agent.stop
+      actor.agent: ga
+      summary_regex: '^/research\s+'
+    action:
+      runner: cc_headless
+      prompt: |
+        {{trigger.summary}}
+        请用 web search + WebFetch 调研，输出 markdown 报告。
+      model: claude-opus-4-7
+      timeout_s: 900
+      budget: {max_calls: 20}
+      result_writeback:
+        kind: feishu_im
+        # trigger.actor.session = fsapp 写入的 chat_id 或 open_id
+        target: "{{trigger.actor.session}}"
+        prefix: "📚 [Research 完成] "
+        max_chars: 1800
+
+  # 演示：noop dry-run 自检
+  - name: ping_demo
+    when:
+      event_type: dispatcher.ping
+    action:
+      runner: noop
+      prompt: "pong: {{trigger.summary}}"
