@@ -1,16 +1,18 @@
 # 🪺 Roostery
 
-> A roost for your agent flock — vendor-neutral agent broker, Feishu-native.
+> 🚧 **Rust 重写中 / Rust Rewrite In Progress** — 仓库未发版，仅作围观。
 >
-> 飞书原生的多 Agent 中立接入器。让任意 agent runtime（OpenClaw / Claude Code / Codex / Cursor / Gemini ...）在飞书生态里栖息、协作、被监督。
+> A roost for your agent flock — vendor-neutral agent broker, Feishu-native. 飞书原生的多 Agent 中立接入器，让任意 agent runtime（OpenClaw / Claude Code / Codex / Cursor / Gemini ...）在飞书生态里栖息、协作、被监督。
 
 ---
 
 ## 状态
 
-🚧 **筹划期 / Planning Phase**（2026-05-15）
+🚧 **Rust 重写中 / Rust Rewrite In Progress**（自 2026-05-15）
 
-本仓库正在筹备开源。Spec 与实现尚未公开。欢迎围观。
+仓库未发布版本。Python baseline 归档在 `legacy/python/` 仅作 reference，活跃实现在 `crates/roostery/`。完整 Rust 重写路线图（21 个 feature / 7 阶段）见 `.codestable/roadmap/rust-rewrite/`，CodeStable 规范体系见 `.codestable/`。
+
+仍处于不可装机状态——0.1.0 release 等到 Rust 达到"可用"形态（Phase 5 完成，CC headless 能在飞书出 task）。版本策略决议见 `.codestable/brainstorms/v0.x-direction/`。
 
 ## 核心定位
 

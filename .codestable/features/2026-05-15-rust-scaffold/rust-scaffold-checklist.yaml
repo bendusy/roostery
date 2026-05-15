@@ -4,7 +4,7 @@ created: 2026-05-15
 steps:
   - action: "文件搬运 + archive commit：建 legacy/python/，git mv src/roostery + tests + examples + scripts 进 legacy/python/，删 index.js + dist/ + .pytest_cache/ + package.json + pyproject.toml，写 legacy/python/README.md，独立提交"
     exit_signal: "ls 根目录无 Python/JS 入口文件；ls legacy/python/src/roostery/ 列出 21+ .py 文件；git status 干净；git log -1 是 archive commit"
-    status: pending
+    status: done
 
   - action: "Rust 工作台建立：写 workspace 根 Cargo.toml + rust-toolchain.toml；建 crates/roostery/Cargo.toml + src/main.rs + src/lib.rs"
     exit_signal: "cargo build 成功 0 warning；cargo run -- --version 输出 'roostery 0.0.0 (rust)'；cargo test --all 输出 '0 passed; 0 failed'"

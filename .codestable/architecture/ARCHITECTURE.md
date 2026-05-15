@@ -1,15 +1,21 @@
 # 🪺 Roostery 架构总入口
 
-> 状态：骨架（从 CLAUDE.md 抽取）
+> 状态：active（Rust 重写期更新）
 > 创建日期：2026-05-15
+> 末次刷新：2026-05-15（rust-scaffold feature 落地时）
 
 ## 1. 项目简介
 
-**Roostery** — vendor-neutral, Feishu-native agent broker。本地 daemon，将任意 agent runtime（Claude Code / Codex / Gemini / OpenClaw / 自定义 Python）桥接到飞书（Lark）作为协作面。
+**Roostery** — vendor-neutral, Feishu-native agent broker。本地 daemon，将任意 agent runtime（Claude Code / Codex / Gemini / OpenClaw / 自定义 Python）桥接到飞书（Lark）作为**跨设备 vibecoding 协作面**。核心动机见 `.codestable/brainstorms/v0.x-direction/`。
 
-当前阶段：planning（v0.0.0），代码来自 prior `feishu_hub` baseline（M3.C → M5.A，~7339 LOC，681 tests upstream）。
+**阶段**：Rust 重写中（自 2026-05-15）。仓库未发布任何版本——首个 0.1.0 等到 Rust 达到"可用"形态（roadmap Phase 5 完成）。
 
-Python 包布局，`package.json` + `index.js` 占住 npm namespace；npm 侧是占位，所有真实代码在 `src/roostery/` 下的 Python。
+**目录布局**：
+
+- `crates/roostery/` — Rust workspace 单 member crate，**活跃代码**（Phase 0 起逐步搭建）
+- `legacy/python/` — prior `feishu_hub` baseline 归档（M3.C → M5.A，~7339 LOC），**仅作 reference，不维护**；Phase 7 `legacy-removal` 删
+- `.codestable/` — CodeStable 规范体系（attention / req / arch / roadmap / brainstorm / feature / compound）
+- `.github/workflows/ci.yml` — fmt / clippy / test 三 job
 
 ## 2. 核心概念 / 术语表
 
@@ -18,11 +24,14 @@ Python 包布局，`package.json` + `index.js` 占住 npm namespace；npm 侧是
 | 概念 | 含义 |
 |------|------|
 | Agent runtime | Claude Code / Codex / Gemini / OpenClaw / 自定义 Python 等本地 agent 进程 |
-| lark-cli | 与飞书通信的唯一 sanctioned subprocess wrapper（pin 在 1.0.28） |
-| Dispatcher | 本地事件 → 规则匹配 → runner 执行的桥接层 |
-| Journal | 本地 jsonl 审计日志（`~/.feishu_hub/`），仅作 replayable audit |
-| Trace | `trace_id` / `depth` / `parent_event_id` 链，loop 保护用 |
+| `lark-cli` | 与飞书通信的唯一 sanctioned subprocess wrapper（pin 在 1.0.28） |
+| `LarkRunner` trait | Rust 期 lark-cli wrapper 的抽象接口，下游所有模块依赖 trait 而非具体 struct（见 roadmap §4.1） |
+| Dispatcher | 本地事件 → 规则匹配 → runner 执行的桥接层（Module E，Phase 4） |
+| Journal | 本地 jsonl 审计日志（`~/.feishu_hub/`），仅作 replayable audit + portable data |
+| `JournalEntry` schema | journal 单行结构，是 `portable-by-default` req 的公开契约（见 roadmap §4.2） |
+| Trace | `trace_id` / `depth` / `parent_event_id` 链，loop 保护用（见 roadmap §4.5） |
 | Budget | 调用次数与成本上限 |
+| Roost | 项目名含义——agent 来此栖息，离开时带着自己的痕迹走（不锁定在某一协作平面） |
 
 ### State ownership
 
@@ -33,50 +42,79 @@ Python 包布局，`package.json` + `index.js` 占住 npm namespace；npm 侧是
 | Comments / collab traces | Feishu Docs comments、group chat |
 | Index / stats / dashboard | Feishu Base（索引层，**非** source of truth） |
 | 云侧路由（@mention / cron） | Feishu Base Workflow（`LarkMessageTrigger` / `TimerTrigger`） |
-| 本地进程 / 模型调用 / budget | Local（`dispatcher.runners`, `dispatcher.budget`） |
-| Audit / replay | 本地 journal jsonl (`journal.py`) |
+| 本地进程 / 模型调用 / budget | Local（Rust：`dispatcher::runners` / `dispatcher::budget`，Phase 4） |
+| Audit / replay | 本地 journal jsonl（Rust：`journal` 模块，Phase 1） |
 
 ## 3. 子系统 / 模块索引
 
-源码在 `src/roostery/`，详细 red-line 见 `src/roostery/README.md`。
+按 roadmap rust-rewrite §3 聚成 8 个模块。详细 feature 拆解和接口契约见 `.codestable/roadmap/rust-rewrite/`。
 
-- **`lark_cli.py`** — 稳定的 `lark-cli` subprocess wrapper（JSON 解析、异常归一化）。与飞书通信的唯一 sanctioned 入口。
-- **Shim & audit**
-  - `shim.py` — PATH-prefix shim，透明代理真 `lark-cli` 并写 journal
-  - `journal.py`、`redact.py`、`remoterefs.py`（从 stdout 抽取 `doc_token` / `record_id` 等）
-- **本地 config / 安装**
-  - `config.py` — `~/.feishu_hub/config.yaml`
-  - `hooks_merge.py` — 合并 Stop hooks 到 `~/.claude/settings.json` / `~/.codex/hooks.json`
-  - `onboarding.py`、`identity.py`、`templates/`
-- **Bot bridge（M3.B 主路径）**
-  - `task_writer.py` — 创建 Feishu task + append step stream + session cache
-  - `stop_hook.py` — shell→python 桥，task_writer 优先 IM 兜底
-  - `bot_runner.py`、`bot_bridge.py`、`bot_relay_task.py`、`bot_role.py`、`hitl_router.py`
-- **`dispatcher/`** — 本地执行桥（M3.A 后已轻量化）
-  - `cli.py` — `fire` / `replay` / `test-rule`
-  - `loop.py` — event → match rules → trace/budget gate → run runner → emit
-  - `rules.py` — 本地 hook → runner 匹配
-  - `runners.py` — `cc_headless` / `codex_exec` / `gemini_headless` / `noop`
-  - `trace.py` — loop 保护链
-  - `budget.py` — call-count + 成本上限
-- **Reporting**
-  - `git_log.py`（多仓聚合）
-  - `llm_summary.py`（**唯一**允许 import GA-style llmcore client 的模块）
-  - `daily_report.py`、`record_writer.py`
-- **其他**：`agent_detect.py`、`base_config.py`、`base_indexer.py`、`base_intent_router.py`、`event_bridge.py`、`runner_registry.py`
+> Phase 0（rust-scaffold，本 feature）落地时 `crates/roostery/src/` 仅有 `main.rs` + `lib.rs`。下表是 **target architecture**，每个 Phase 的 feature 落地时实际 Rust 文件才出现。
 
-## 4. 关键架构决定
+### Module A · 基础工具（Phase 1）
+纯数据操作。`schema` 常量、`redact`（敏感字段脱敏）、`remoterefs`（regex 抽 `doc_token` / `record_id`）。
+- 子 feature：`rust-scaffold` / `core-redact` / `core-remoterefs`
 
-1. **vendor-neutral 桥而非 SDK**。Roostery 不替代 agent runtime，也不替代 Feishu，它只做转换 + 审计。
-2. **Feishu = source of truth**。本地是 cache / audit，不是 canonical 协作记录。
-3. **lark-cli 是唯一飞书入口**。不允许新增 HTTP client 直连 `open.feishu.cn`。
-4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge.py` + `templates/` 扩展，loop 不感知 provider。
-5. **`llm_summary.py` 是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral。
+### Module B · 本地审计 / Journal（Phase 1）
+本地 jsonl audit / replay。`JournalEntry` schema 是 `portable-by-default` req 的契约载体（公开、稳定、可移植）。
+- 子 feature：`journal-core`
 
-## 5. 已知约束 / 硬边界
+### Module C · 飞书 Syscall（Phase 2）
+飞书通信的唯一 sanctioned 通道。`LarkRunner` trait + 默认 subprocess 实现 + `roostery smoke` + `bin/shim` 二进制。
+- 子 feature：`lark-cli-wrapper` / `roostery-smoke` / `lark-cli-shim`
 
-1. **禁止重实现 lark-cli**。飞书有 API 就走 `lark_cli.py`，不准 `requests` 打 `open.feishu.cn`。
-2. **本地 state 是 cache 不是真相**。`~/.feishu_hub/` 下任何东西都只是可重放的审计。若发现某段代码靠读本地 state 来回答"任务 X 现在状态如何"——那是 bug。
-3. **`llm_summary.py` 是 GA-style llmcore / mykey client import 的唯一允许位置。**
-4. **lark-cli 版本 pin 在 1.0.28**（特别是 `task agent_task_step_info append_task_steps` timestamp schema 的兼容）。升级需先跑 smoke。
-5. **`python -m roostery smoke` 是升级后的 gate**。它跑验证过的命令矩阵（`im +messages-send`、`docs +create v2`、`docs +update overwrite`、`drive files list / +create-folder / move`）。任意 probe 失败，`init` 和 `daily_report` 拒绝运行。
+### Module D · 本地配置与安装（Phase 3）
+bootstrap `~/.feishu_hub/`、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入模板。
+- 子 feature：`config-yaml` / `hooks-merge` / `roostery-init`
+
+### Module E · Dispatcher（Phase 4）
+本地执行桥。event → 规则匹配 → trace/budget gate → runner → emit。`runtime-neutral` req 的执行机制（通过 `Runner` trait 调度，不感知具体 runtime）。
+- 子 feature：`dispatcher-trace-budget` / `dispatcher-rules` / `dispatcher-runners` / `dispatcher-loop`
+
+### Module F · Bot Bridge（Phase 5）
+agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feishu` req 的直接兑现层**。`bot-stop-hook` feature 完成 = "Rust 可用" milestone = 0.1.0 触发判据。
+- 子 feature：`bot-task-writer` / `bot-stop-hook` / `bot-bridge-cluster`
+
+### Module G · Reporting（Phase 6）
+日报：git log 聚合 + LLM 摘要 + 写飞书 docx + Base 记录。`llm_summary` 是**唯一**允许 import 外部 LLM client 的模块（架构红线）。Cargo feature flag 控制。
+- 子 feature：`report-git-llm` / `report-daily`
+
+### Module H · Base Index（Phase 7）
+Feishu Base 作为索引层（**非** source of truth）。
+- 子 feature：`base-indexer`
+
+### 终态切换（Phase 7）
+- 子 feature：`legacy-removal`（删 `legacy/python/`、重写 README、crates.io 准备）
+
+## 4. 跨模块接口契约
+
+7 个契约在 `.codestable/roadmap/rust-rewrite/rust-rewrite-roadmap.md` §4 定义，是 feature-design 的硬约束输入：
+
+| # | 契约 | 方向 | Phase 落地 |
+|---|---|---|---|
+| 4.1 | `LarkRunner` trait | E/F/G/H → C | Phase 2 |
+| 4.2 | `JournalEntry` schema | C/E/F 写 → 用户/社区读 | Phase 1 |
+| 4.3 | `Runner` trait | E → 具体 runner | Phase 4 |
+| 4.4 | `HookEvent` schema | D/E → E | Phase 3-4 |
+| 4.5 | `TraceContext` | E → F → C | Phase 4 |
+| 4.6 | Config schema | D 写 → 所有读 | Phase 3 |
+| 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 |
+
+## 5. 关键架构决定
+
+1. **vendor-neutral 桥而非 SDK**。Roostery 不替代 agent runtime，也不替代 Feishu，它只做转换 + 审计
+2. **Feishu = default view，不是 lock-in**。本地是 cache / audit，journal 是 portable 数据形态——飞书出问题 / 想换前端，能基于 journal 重建（兑现 `portable-by-default` req）
+3. **`lark-cli` 是唯一飞书入口**。不允许新增 HTTP client 直连 `open.feishu.cn`
+4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge` + 模板嵌入扩展，loop 不感知 provider
+5. **`llm_summary` 模块是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral
+
+## 6. 已知约束 / 硬边界
+
+> 完整 9 条硬约束见 `.codestable/attention.md`——每次 CodeStable 子技能启动自动加载。
+
+1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK
+2. **本地 state 是 cache 不是真相**。`~/.feishu_hub/` 下任何东西都只是可重放的审计，不回答"任务 X 现在状态如何"
+3. **`llm_summary` 是外部 LLM client import 的唯一允许位置**
+4. **lark-cli 版本 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke
+5. **smoke 是升级后的 gate**。任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行
+6. **代码-文档优先级**：Python baseline 与最新文档冲突时**以文档为准**（见 attention.md）。Rust port 不机械 1:1 翻译，失配点记观察项

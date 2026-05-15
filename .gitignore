@@ -1,4 +1,9 @@
-# Python
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Python (legacy/python/ build artifacts)
 __pycache__/
 *.py[cod]
 .venv/

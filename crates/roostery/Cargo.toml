@@ -1,0 +1,16 @@
+[package]
+name = "roostery"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "🪺 Vendor-neutral agent broker, Feishu-native."
+
+[lib]
+name = "roostery"
+path = "src/lib.rs"
+
+[[bin]]
+name = "roostery"
+path = "src/main.rs"

@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["crates/roostery"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+authors = ["Ben Dusy <ben@bendusy.dev>"]
+repository = "https://github.com/bendusy/roostery"
