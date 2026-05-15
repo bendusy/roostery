@@ -1,0 +1,171 @@
+roadmap: rust-rewrite
+created: 2026-05-15
+
+items:
+  - slug: rust-scaffold
+    description: Cargo workspace + Python 整体归档进 legacy/python/ + CI 骨架（fmt/clippy/test）
+    depends_on: []
+    status: in-progress
+    feature: 2026-05-15-rust-scaffold
+    minimal_loop: false
+    notes: "Phase 0；完成后 cargo run -- --version 输出 roostery 0.0.0 (rust)；删 pyproject.toml / index.js / package.json（npm + PyPI namespace 已 reserved 不依赖本地 manifest）"
+
+  - slug: core-redact
+    description: redact 模块，敏感字段脱敏；纯函数无 I/O
+    depends_on: [rust-scaffold]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 1；Python 版作 reference，行为以接口契约 + portable-by-default 边界为准"
+
+  - slug: core-remoterefs
+    description: remoterefs 模块，regex 从 lark-cli stdout 抽 doc_token / record_id 等
+    depends_on: [rust-scaffold]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 1；Python 版 reference"
+
+  - slug: journal-core
+    description: Journal 模块 + JournalEntry schema（§4.2）首次落地，schema_version=1 对外承诺
+    depends_on: [rust-scaffold, core-redact]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 1；portable-by-default req 核心契约载体；schema 重新设计不继承 Python 版 jsonl"
+
+  - slug: lark-cli-wrapper
+    description: LarkRunner trait（§4.1）+ 默认 subprocess 实现 + 错误归一化 + mock 实现
+    depends_on: [rust-scaffold, journal-core]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 2；下游所有飞书操作必经此 trait"
+
+  - slug: roostery-smoke
+    description: roostery smoke 子命令，跑 6 个 probe 验证矩阵（im / docs / drive）
+    depends_on: [lark-cli-wrapper]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 2；probe 命令矩阵以 lark-cli 1.0.28 schema 为准"
+
+  - slug: lark-cli-shim
+    description: bin/shim 独立二进制，PATH-prefix shim 透传真 lark-cli 并写 journal
+    depends_on: [lark-cli-wrapper, journal-core]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 2；shim 是 ~/.local/bin/lark-cli 装机点，agent runtime 调 lark-cli 必经"
+
+  - slug: config-yaml
+    description: Config schema（§4.6）读写 + 默认值 + schema_version 升级路径
+    depends_on: [rust-scaffold]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 3；schema 重新设计；Python 版 ~/.feishu_hub/config.yaml 迁移不在范围"
+
+  - slug: hooks-merge
+    description: JSON 深合并，CC / Codex Stop hook 注入 ~/.claude/settings.json / ~/.codex/hooks.json
+    depends_on: [config-yaml]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 3；Python 版输出做 golden file，Rust 版 byte-for-byte 一致（除非文档另有规定）"
+
+  - slug: roostery-init
+    description: roostery init 子命令 + identity / agent_detect / 模板嵌入（§4.7）
+    depends_on: [hooks-merge, lark-cli-shim]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 3；完成后陌生开发者第一次能跑通装机链路；尚不能 E2E 出 task"
+
+  - slug: dispatcher-trace-budget
+    description: Trace（§4.5）+ Budget gate 模块；持久化 ~/.feishu_hub/state/budget.json
+    depends_on: [rust-scaffold, journal-core, config-yaml]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 4；loop 保护是中立 dispatcher 的前提"
+
+  - slug: dispatcher-rules
+    description: Rules 模块 + YAML 规则反序列化 + 匹配逻辑
+    depends_on: [dispatcher-trace-budget]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 4；rule schema 重新设计"
+
+  - slug: dispatcher-runners
+    description: Runner trait（§4.3）+ cc_headless / codex_exec / gemini_headless / noop 默认实现 + runner_registry
+    depends_on: [dispatcher-trace-budget, lark-cli-wrapper]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 4；首发 cc_headless 即可工作，其他可 stub（runtime-neutral req 允许）"
+
+  - slug: dispatcher-loop
+    description: Loop + Event bridge + roostery dispatcher 子命令（fire / replay / test-rule）
+    depends_on: [dispatcher-rules, dispatcher-runners]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 4；Python 版 7 个 test_dispatcher_*.py 核心 case 作 reference 翻译；case 行为以文档为准"
+
+  - slug: bot-task-writer
+    description: Task writer 创建 Feishu task + append step stream + session cache
+    depends_on: [lark-cli-wrapper, journal-core, config-yaml]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 5；session cache schema 重新设计"
+
+  - slug: bot-stop-hook
+    description: Stop hook 入口，原生处理 stdin JSON event，task_writer 主路径 + IM 兜底
+    depends_on: [bot-task-writer, dispatcher-loop, roostery-init]
+    status: planned
+    feature: null
+    minimal_loop: true
+    notes: "Phase 5；🎯 最小闭环：完成后 CC headless 在飞书出 task；0.1.0 release 触发判据"
+
+  - slug: bot-bridge-cluster
+    description: bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router 合并实现
+    depends_on: [bot-stop-hook]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 5；启动前可能需要 cs-arch new 梳理 Python 版耦合行为（见 §7 观察项）"
+
+  - slug: report-git-llm
+    description: git_log 多仓聚合 + llm_summary（唯一允许 reqwest 直连外部 LLM 的模块）
+    depends_on: [rust-scaffold]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 6；Cargo feature flag daily-report 默认开；--no-default-features 必须能剥掉 reqwest"
+
+  - slug: report-daily
+    description: Daily report 主流程 + record_writer（写飞书 docx + Base 记录）
+    depends_on: [report-git-llm, lark-cli-wrapper, journal-core, config-yaml]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 6"
+
+  - slug: base-indexer
+    description: base_config + base_indexer + base_intent_router；Base 是索引层非 source of truth
+    depends_on: [lark-cli-wrapper, config-yaml]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 7"
+
+  - slug: legacy-removal
+    description: 删 legacy/python/、重写 README（leading with user-why）、更新 CLAUDE.md、Cargo.toml crates.io 元信息、GitHub Actions release workflow
+    depends_on: [bot-bridge-cluster, report-daily, base-indexer]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: "Phase 7；兑现 brainstorm v0.x-direction 的 README 改写显式任务 + 项目终态切换"
