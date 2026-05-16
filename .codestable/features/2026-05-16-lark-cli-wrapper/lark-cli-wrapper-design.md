@@ -139,8 +139,20 @@ pub struct RunOptions {
     pub stdin: Option<String>,
     pub profile: Option<String>,      // lark-cli --profile global flag
 }
-// non_exhaustive 让未来加 env / cwd / kill_on_drop 等字段不破坏 caller 的
-// `RunOptions { timeout: x, ..Default::default() }` 构造模式。
+
+impl RunOptions {
+    pub fn new() -> Self { Self::default() }
+    pub fn with_timeout(mut self, timeout: Duration) -> Self { self.timeout = Some(timeout); self }
+    pub fn with_stdin(mut self, stdin: impl Into<String>) -> Self { self.stdin = Some(stdin.into()); self }
+    pub fn with_profile(mut self, profile: impl Into<String>) -> Self { self.profile = Some(profile.into()); self }
+}
+
+// **Calibration（2026-05-16，lark-cli-wrapper impl 阶段）**：design 初稿
+// 写"caller 用 `RunOptions { timeout: x, ..Default::default() }`"——实际
+// `#[non_exhaustive]` struct 从外部 crate **完全不允许** struct literal，
+// 包括 `..Default::default()` 也会触发 rustc E0639。caller 必经 builder
+// API（`RunOptions::new().with_timeout(d).with_stdin(s).with_profile(p)`）。
+// 未来加 `env` / `cwd` / `kill_on_drop` 字段时 builder 链不变，零破坏。
 ```
 
 ```rust
@@ -475,7 +487,7 @@ flowchart TD
 - **S2.4** 退出码非 0 + stderr：伪 binary 退 1 + stderr 写"perm denied" → `match err { LarkError::NonZeroExit { exit_code: 1, stderr, body_code: None, .. } => assert!(stderr.contains("perm denied")) }`；`err.retriable() == false`
 - **S2.4b** body_code 解析：伪 binary 退 1 + stdout `{"code":99991663,"msg":"token expired"}` → `LarkError::NonZeroExit { body_code: Some(99991663), message, .. }`；`err.retriable() == true`
 - **S2.5** Spawn 失败：`LarkCli::with_binary("/nonexistent/lark-cli-bin")` → `match err { LarkError::Spawn { path, source } => assert!(matches!(source.kind(), io::ErrorKind::NotFound)) }`
-- **S2.6** Timeout + child kill：伪 binary `sh -c 'echo $$ > $TMPFILE; sleep 5'`（写自己 PID 到 tmpfile 后 sleep），`RunOptions { timeout: Some(Duration::from_millis(100)), .. }` → `LarkError::Timeout { timeout_ms: 100 }`；`err.retriable() == true`；**100ms 后读 tmpfile 拿 child PID，`std::process::Command::new("kill").args(["-0", &pid]).status()` 退出码非 0** → child 真死无 zombie（不引 nix crate）
+- **S2.6** Timeout 验证（**Calibration 2026-05-16**）：伪 binary `sleep 30`，`RunOptions::new().with_timeout(Duration::from_millis(500))` → `LarkError::Timeout { timeout_ms: 500 }`；`err.retriable() == true`；**实际函数返回时间 < 5s（远小于 fixture 30s sleep）证明 timeout 真触发**。原方案"PID + kill -0 验证 child 真死"在 macOS 并发负载下 sh spawn 时间不可预测、Linux CI 上 ETXTBSY race（已用 `std::fs::write` 替代 `File::create+drop` 修复 commit `cc44dfa`），改用 duration assertion；tokio `kill_on_drop(true)` 是上游契约不该在本层重测
 - **S2.7** stdin 透传：伪 binary `cat`（输出 stdin），`RunOptions { stdin: Some(r#"{"x":1}"#.into()), .. }` → `Ok(json!({"x":1}))`
 - **S2.8** profile flag 透传：`RunOptions { profile: Some("bot2".into()), .. }` → 实际 spawn 的 argv 含 `["--profile", "bot2"]` 在子命令前
 

@@ -37,7 +37,7 @@ items:
   - slug: lark-cli-wrapper
     description: LarkRunner trait（§4.1，已升级 rich enum + thiserror）+ LarkCli subprocess + MockLarkRunner + Journaled<R> 装饰器
     depends_on: [rust-scaffold, journal-core]
-    status: in-progress
+    status: done
     feature: 2026-05-16-lark-cli-wrapper
     minimal_loop: false
     notes: "Phase 2；下游所有飞书操作必经此 trait"

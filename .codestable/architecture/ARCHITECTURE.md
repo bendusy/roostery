@@ -25,7 +25,8 @@
 |------|------|
 | Agent runtime | Claude Code / Codex / Gemini / OpenClaw / 自定义 Python 等本地 agent 进程 |
 | `lark-cli` | 与飞书通信的唯一 sanctioned subprocess wrapper（pin 在 1.0.28） |
-| `LarkRunner` trait | Rust 期 lark-cli wrapper 的抽象接口，下游所有模块依赖 trait 而非具体 struct（见 roadmap §4.1） |
+| `LarkRunner` trait | Rust 期 lark-cli wrapper 的抽象接口（async + Send + Sync），下游所有模块依赖 trait 而非具体 struct；已落地 `crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）。三实现：`LarkCli`（subprocess）/ `MockLarkRunner`（测试替身）/ `Journaled<R>`（journal 装饰器）。`run` 和 `run_with_options` 双 method 见 roadmap §4.1 |
+| `LarkError` | `#[non_exhaustive]` rich enum + thiserror，4 变体 `Spawn` / `NonZeroExit` / `OutputParse` / `Timeout`，每变体携带专有数据；`retriable()` method（非字段）。caller 必经 `match` + `_ =>` 处理（外部 crate E0004 守护）。见 roadmap §4.1 |
 | Dispatcher | 本地事件 → 规则匹配 → runner 执行的桥接层（Module E，Phase 4） |
 | Journal | 本地 jsonl 审计日志（默认 `~/.roostery/journal/`，可 `$ROOSTERY_HOME` 覆盖），仅作 replayable audit + portable data |
 | `JournalEntry` schema | journal 单行结构，11 字段；`schema_version=1` 自 journal-core 落地起对外公开承诺，破坏性改动需 bump + 旧版兼容反序列化 + cs-roadmap update（见 roadmap §4.2） |
@@ -97,7 +98,20 @@
 
 ### Module C · 飞书 Syscall（Phase 2）
 飞书通信的唯一 sanctioned 通道。`LarkRunner` trait + 默认 subprocess 实现 + `roostery smoke` + `bin/shim` 二进制。
-- 子 feature：`lark-cli-wrapper` / `roostery-smoke` / `lark-cli-shim`
+
+**lark_cli 模块**（已落地，commit `cc44dfa`，Phase 2）：
+
+- 子目录 `crates/roostery/src/lark_cli/`（首个走 compound convention 档 2 子目录组织的模块）：`mod.rs` + `runner.rs` + `error.rs` + `subprocess.rs` + `mock.rs` + `journaled.rs`
+- 公开 trait：`LarkRunner: Send + Sync`（async；`run(args)` 默认 method 委托 `run_with_options(args, opts)`）；roadmap §4.1 兑现层
+- 公开类型：`RunOptions`（`#[non_exhaustive]` + **builder API** `new/with_timeout/with_stdin/with_profile`）；`LarkError`（`#[non_exhaustive]` rich enum + thiserror，4 变体 `Spawn { path, program_args, source: io::Error }` / `NonZeroExit { exit_code, body_code, message, stdout, stderr }` / `OutputParse { source: serde_json::Error, stdout }` / `Timeout { timeout_ms }`，`MAX_FIELD_LEN_IN_ERR = 4 KiB` 字段截断，`retriable()` method 由 `matches!` 实现）
+- 三个 LarkRunner 实现：
+  - `LarkCli`（默认 subprocess；`ROOSTERY_LARK_CLI_BIN` env > 默认 `"lark-cli"` 走 PATH；30s 默认 timeout；`kill_on_drop(true)`）
+  - `MockLarkRunner`（test utility；FIFO `VecDeque` 队列 + 调用记录；`enqueue_*(&Self)` 链式；空队列 panic；Drop 未消费 `tracing::warn!`）
+  - `Journaled<R: LarkRunner>`（装饰器；写 journal 前用 `redact::scrub_argv` 脱敏 argv；写失败 `tracing::warn!` 不破坏原 result）
+- **下游约定**：模块 D/E/F/G/H 依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接 `Command::new("lark-cli")`（双向引用 §6 第 1 条架构红线）
+- **不在范围**（Phase 2）：业务包裹函数（`im_send_text` 等归 Phase 5+）；retry（归 Phase 4 dispatcher）；jq 选择器；Config 驱动构造
+
+- 子 feature：**`lark-cli-wrapper`（done）** / `roostery-smoke` / `lark-cli-shim`
 
 ### Module D · 本地配置与安装（Phase 3）
 bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`）、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入模板。
@@ -149,7 +163,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 
 > 完整 9 条硬约束见 `.codestable/attention.md`——每次 CodeStable 子技能启动自动加载。
 
-1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK
+1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK。**兑现层**：`crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）暴露 `LarkRunner` trait + 三个实现；新模块依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接拼 `Command::new("lark-cli")`（双向引用 `lark_cli/mod.rs` 顶部 docstring）
 2. **本地 state 是 cache 不是真相**。`~/.roostery/`（Rust 期；Python 期 `~/.feishu_hub/`）下任何东西都只是可重放的审计，不回答"任务 X 现在状态如何"
 3. **`llm_summary` 是外部 LLM client import 的唯一允许位置**
 4. **lark-cli 版本 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke

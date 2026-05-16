@@ -19,11 +19,13 @@
 
 - 飞书相关功能测试一律用 `LarkRunner` trait 的 mock 实现（Rust Phase 2 起）；不要写跑真飞书的测试除非显式标 `#[ignore]` e2e 并由人手跑
 - Rust 2024 edition `std::env::set_var` / `remove_var` 是 `unsafe`，写 env 的生产代码需 `unsafe {}` 块，测试中并发触碰 env 必须用 `static Mutex` 串行化避免数据竞争（参考 `crates/roostery/src/paths.rs` `ENV_LOCK` 模式）
+- 测试中创建可执行 fixture 文件再立即 `execve` 时用 `std::fs::write(path, content)` **不要** `File::create + write_all + drop` —— Linux 后者有 ETXTBSY race（fd close 与 execve 之间窗口；macOS 不报这个错），CI 偶发 `ExecutableFileBusy`。参考 `crates/roostery/src/lark_cli/subprocess.rs::fixture_script`
 
 ### 命令与脚本陷阱
 
 - 飞书 API **必经 `lark-cli`**（`lark_cli.py` / `lark_cli.rs` subprocess wrapper）——不允许直接 `requests` / `reqwest` / 任何 HTTP client 打 `open.feishu.cn`，也不允许引 Feishu SDK；架构红线，code review 拒收
 - agent runtime 的 Stop hook 安装走 `roostery init`（Rust 期 hooks_merge feature），**不要手动编辑** `~/.claude/settings.json` / `~/.codex/hooks.json` 注入——会跟下次 init 的深合并冲突
+- Rust `#[non_exhaustive]` struct 从外部 crate **完全不允许** struct literal——包括 `..Default::default()` 也会触发 rustc E0639。必须配 builder API（参考 `RunOptions::new().with_timeout(d)`）；新引入 non_exhaustive 容器 struct 时同时加 `new() + with_*` 链不要假设 `..Default::default()` 旁路
 
 ### 路径与目录约定
 

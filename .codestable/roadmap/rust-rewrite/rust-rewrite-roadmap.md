@@ -107,6 +107,12 @@ Roostery Rust
 
 下面 7 个契约是 feature-design 的**硬约束输入**——单 feature 实现不允许擅自违反，要改先回 `cs-roadmap update`。
 
+**契约演化记录机制（ADR-lite）**：任何对 §4.x 的修订必须在该 § 末尾追加一条记录，固定格式：
+
+> **{YYYY-MM-DD}**（trigger feature `{feature-slug}`，commit `{hash}`）：{change summary 一句}. **理由**：{rationale 一句}. **受影响 caller**：{count} ({list or "0 (首个实现者)"})。
+
+这是首个走 lark-cli-wrapper 落地的轻量机制——避免 0 下游受影响的小型契约修订也要起 cs-roadmap full workflow，又对未来 maintainer 透明可审计。结论性 / 重大契约改动（多 caller 受影响 / 语义变更）仍走 cs-roadmap update。
+
 ### 4.1 `LarkRunner` trait
 
 **方向**：模块 E / F / G / H → 模块 C
@@ -381,12 +387,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 
 ### Module C · 飞书 Syscall
 
-5. **`lark-cli-wrapper`** — `LarkRunner` trait（§4.1）+ 默认 subprocess 实现 + 错误归一化
+5. **`lark-cli-wrapper`** — `LarkRunner` trait（§4.1 已升级 rich enum + thiserror）+ LarkCli subprocess + MockLarkRunner + Journaled<R> 装饰器
    - 所属模块：C
    - 依赖：`rust-scaffold`、`journal-core`
-   - 状态：planned
-   - 主要支持的 req：`agent-work-in-feishu`（飞书通信基础）、`portable-by-default`（每次调用写 journal）
-   - 备注：Phase 2;Mock 实现一并提供，下游 feature 测试用
+   - 状态：**done**（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）
+   - 主要支持的 req：`agent-work-in-feishu`（飞书通信基础）、`portable-by-default`（每次调用经 Journaled 写 journal）
+   - 备注：Phase 2；项目首次引入 tokio + async + subprocess；首次走档 2 子目录组织；首次走"契约演化记录段"ADR-lite 路径修订 roadmap §4.1（rich enum + retriable() method + RunOptions builder + Journaled 装饰器分离）；Mock 默认 public 供下游 feature 测试用
 
 6. **`roostery-smoke`** — `roostery smoke` 子命令，跑验证矩阵
    - 所属模块：C
