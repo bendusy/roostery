@@ -328,7 +328,7 @@ flowchart TD
 - `grep -E "ulid = |uuid = " crates/roostery/Cargo.toml` → 无（自实现 ULID）
 - `grep -E "tracing-appender|slog" crates/roostery/Cargo.toml` → 无
 - `grep -E "size:|never" crates/roostery/src/journal.rs | grep -v "//\|test"` → 非测试 / 非注释代码无 rotation 策略字面值（Phase 1 仅 daily）
-- `grep "panic!\|\.unwrap()" crates/roostery/src/journal.rs crates/roostery/src/paths.rs` → 非测试代码仅 1 处允许：`serde_json::to_vec(&entry).expect("JournalEntry serializes")`（programmer-error 兜底）
+- `grep "panic!\|\.unwrap()" crates/roostery/src/journal.rs crates/roostery/src/paths.rs` → 非测试代码 ≤3 处 expect 且皆为 programmer/env error 兜底：(a) `String::from_utf8(out).expect("Crockford alphabet is ASCII")` — Crockford 字母表是 ASCII，programmer error 不可达；(b) `getrandom::getrandom(&mut buf).expect("OS RNG available")` — env error 兜底；(c) `serde_json::to_vec(&entry).expect("JournalEntry serializes")` — programmer error。**Calibration 修订**：design 初稿写"仅 1 处"未考虑 ULID 实现需要的两处 environment 兜底（acceptance 时回写，与 core-redact wc-l calibration 同款修订）
 - `wc -l crates/roostery/src/journal.rs` → < 400（含 inline tests；Rust idiom 同 redact 标尺）
 - `wc -l crates/roostery/src/paths.rs` → < 100（小工具文件）
 

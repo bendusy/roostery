@@ -3,8 +3,8 @@ doc_type: requirement
 slug: portable-by-default
 pitch: 你的 agent 工作痕迹在本地——飞书出问题 / 想换平台 / 自建前端都能继续用。Roostery 是中立中间件，不是飞书附属。
 status: draft
-last_reviewed: 2026-05-15
-implemented_by: []
+last_reviewed: 2026-05-16
+implemented_by: [2026-05-15-core-redact, 2026-05-15-journal-core]
 tags: [portability, vendor-neutral, local-first, escape-hatch]
 ---
 
@@ -55,3 +55,8 @@ journal 的 schema 公开、稳定（每行带 version 标记）。这意味着�
 - **不做长期归档管理**——文件在本地积累，rotation / 压缩 / 备份归用户管
 - **不做 journal 的跨设备同步**——journal 是可移植的本地数据形态，但 Roostery 自己不替你把不同设备的 journal 合并 / 同步。多设备 agent 状态的实时跨设备整合走飞书侧（见 `agent-work-in-feishu`），不走 journal
 - **replay 不替代真测**——replay 只重现 Roostery 自己这一侧，不重现飞书云端真实状态、不重现 agent runtime 的副作用
+
+## 变更日志
+
+- **2026-05-16** · `journal-core` 落地（commit `b9ac5be`）：`JournalEntry` schema_version=1 对外公开承诺正式生效，jsonl 写入侧基础设施 + ULID `event_id` + UTC 日切 rotation + redact 集成完成。**写入侧 req 已兑现**；read/replay API + 跨设备 / 自建 view 的具体落地仍待后续 phase——req 保持 `draft` 直至这些场景出现具体可消费的工具
+- **2026-05-15** · `core-redact` 落地（commit `1e392e5`）：`scrub_value` / `scrub_argv` / `scrub_text` + `MASK` + 11 个 `SENSITIVE_KEYS`。兑现"基础脱敏"边界；为 journal 写入提供 logging-boundary 脱敏前置

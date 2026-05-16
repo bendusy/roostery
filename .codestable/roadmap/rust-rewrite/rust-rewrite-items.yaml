@@ -29,7 +29,7 @@ items:
   - slug: journal-core
     description: Journal 模块 + JournalEntry schema（§4.2）首次落地，schema_version=1 对外承诺
     depends_on: [rust-scaffold, core-redact]
-    status: in-progress
+    status: done
     feature: 2026-05-15-journal-core
     minimal_loop: false
     notes: "Phase 1；portable-by-default req 核心契约载体；schema 重新设计不继承 Python 版 jsonl"

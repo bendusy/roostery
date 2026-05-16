@@ -18,6 +18,7 @@
 ### 测试
 
 - 飞书相关功能测试一律用 `LarkRunner` trait 的 mock 实现（Rust Phase 2 起）；不要写跑真飞书的测试除非显式标 `#[ignore]` e2e 并由人手跑
+- Rust 2024 edition `std::env::set_var` / `remove_var` 是 `unsafe`，写 env 的生产代码需 `unsafe {}` 块，测试中并发触碰 env 必须用 `static Mutex` 串行化避免数据竞争（参考 `crates/roostery/src/paths.rs` `ENV_LOCK` 模式）
 
 ### 命令与脚本陷阱
 
@@ -26,7 +27,7 @@
 
 ### 路径与目录约定
 
-- `~/.feishu_hub/` 下所有 state（journal / session cache / budget）是**可重放审计 cache，不是 source of truth**——回答"任务 X 现在状态如何"必须查飞书侧（Feishu Task / IM / Base），不查本地 state
+- 本地 state 根目录：**Rust 期 `~/.roostery/`**（自 journal-core 起；env 覆盖 `ROOSTERY_HOME`）；Python 期 `~/.feishu_hub/` / `FEISHU_HUB_HOME`（legacy）。所有 state（journal / session cache / budget）是**可重放审计 cache，不是 source of truth**——回答"任务 X 现在状态如何"必须查飞书侧（Feishu Task / IM / Base），不查本地 state
 
 ### 环境变量与凭证
 

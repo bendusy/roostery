@@ -79,7 +79,7 @@ Roostery Rust
 - **触碰的现有代码**：全新（Python 版 `lark_cli.py` + `smoke.py` + `shim.py` 作 reference）
 
 ### 模块 D · 本地配置与安装
-- **职责**：bootstrap `~/.feishu_hub/`、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入 Stop hook 脚本模板。用户面对的 `roostery init` 入口
+- **职责**：bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖 `ROOSTERY_HOME`）、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入 Stop hook 脚本模板。用户面对的 `roostery init` 入口
 - **承载的子 feature**：`config-yaml`、`hooks-merge`、`roostery-init`
 - **触碰的现有代码**：全新（Python 版 `config.py` + `hooks_merge.py` + `identity.py` + `agent_detect.py` + `onboarding.py` + `templates/` 作 reference）
 
@@ -242,7 +242,7 @@ pub struct TraceContext {
 - dispatcher loop 在分发到 runner 前必须把 depth +1，超出 max_depth 直接拒绝
 - bot bridge / lark_cli wrapper 接收到 trace 必须传递不能丢——这是 loop 保护和 replay 重建依赖链的依据
 
-### 4.6 Config schema（`~/.feishu_hub/config.yaml`）
+### 4.6 Config schema（`~/.roostery/config.yaml`）
 
 **方向**：写者 = 模块 D（roostery init）；读者 = 所有模块
 **形式**：YAML
@@ -267,7 +267,7 @@ budgets:
 trace:
   max_depth: u32                   # 默认 8
 journal:
-  dir: string                      # 默认 ~/.feishu_hub/journal/
+  dir: string                      # 默认 ~/.roostery/journal/（journal-core 已落地）
   rotation: "daily" | "size:{MB}" | "never"
 ```
 
@@ -279,7 +279,7 @@ journal:
 ### 4.7 模板嵌入约定
 
 **方向**：模块 D（onboarding）→ 用户文件系统
-**形式**：`include_str!` 编译期嵌入 + 写到 `~/.claude/settings.json` / `~/.codex/hooks.json` / `~/.feishu_hub/scripts/`
+**形式**：`include_str!` 编译期嵌入 + 写到 `~/.claude/settings.json` / `~/.codex/hooks.json` / `~/.roostery/scripts/`
 
 ```rust
 pub const STOP_HOOK_AGENT_NOTIFY_SH: &str = include_str!("templates/agent_stop_notify.sh");
@@ -326,9 +326,9 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 4. **`journal-core`** — Journal 模块 + `JournalEntry` schema（§4.2）首次落地
    - 所属模块：B
    - 依赖：`rust-scaffold`、`core-redact`
-   - 状态：planned
+   - 状态：**done**（feature `2026-05-15-journal-core`，commit `b9ac5be`）
    - 主要支持的 req：**`portable-by-default`**（核心契约载体）
-   - 备注：Phase 1；schema 重新设计不继承 Python 版 jsonl 格式；schema_version=1 是首次对外承诺
+   - 备注：Phase 1；schema 重新设计不继承 Python 版 jsonl 格式；schema_version=1 已落地为对外承诺；同步迁移 `~/.feishu_hub/` → `~/.roostery/`、`FEISHU_HUB_HOME` → `ROOSTERY_HOME`（一次性切断，无双读期）；Phase 1 仅 daily rotation + 同步 API + 写入侧（read/replay 留后续 phase）
 
 ### Module C · 飞书 Syscall
 
@@ -360,7 +360,7 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
    - 依赖：`rust-scaffold`
    - 状态：planned
    - 主要支持的 req：`agent-work-in-feishu`（用户身份 / 默认群配置）
-   - 备注：Phase 3；schema 重新设计；用户已有 `~/.feishu_hub/config.yaml`（Python 版）的迁移不在本 feature 范围（Python 不维护）
+   - 备注：Phase 3；schema 重新设计；落 `~/.roostery/config.yaml`；用户已有 `~/.feishu_hub/config.yaml`（Python 版）的迁移不在本 feature 范围（Python 不维护）
 
 9. **`hooks-merge`** — JSON 深合并，CC / Codex Stop hook 注入 `~/.claude/settings.json` / `~/.codex/hooks.json`
    - 所属模块：D
@@ -378,7 +378,7 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 
 ### Module E · Dispatcher
 
-11. **`dispatcher-trace-budget`** — Trace（§4.5）+ Budget gate 模块；持久化 `~/.feishu_hub/state/budget.json`
+11. **`dispatcher-trace-budget`** — Trace（§4.5）+ Budget gate 模块；持久化 `~/.roostery/state/budget.json`
     - 所属模块：E
     - 依赖：`rust-scaffold`、`journal-core`、`config-yaml`
     - 状态：planned

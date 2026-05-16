@@ -60,7 +60,7 @@ This invariant is enforced in code review: any module that re-implements what `l
 | Index / stats / dashboard views          | Feishu Base (index layer, **not** source of truth)                   |
 | Cloud-side routing (@mention / cron)     | Feishu Base Workflow (`LarkMessageTrigger` / `TimerTrigger`)         |
 | Local process / model calls / budget     | Local (planned: `dispatcher::runners`, `dispatcher::budget` — Phase 4) |
-| Audit / replay                           | Local journal jsonl (planned: `journal` module — Phase 1)            |
+| Audit / replay                           | Local journal jsonl in `~/.roostery/journal/` (`journal` module — Phase 1, done) |
 
 ### Rust module map (target — Phase 1 onwards)
 
@@ -82,7 +82,7 @@ Cross-module interface contracts (LarkRunner / JournalEntry / Runner / HookEvent
 Loaded automatically into every CodeStable skill via `.codestable/attention.md`. Key ones (full list there):
 
 1. **No `lark-cli` reimplementation.** Feishu API goes through the `lark_cli` wrapper. No direct `reqwest` / HTTP calls to `open.feishu.cn`.
-2. **Local state is cache, not truth.** Anything in `~/.feishu_hub/` is replayable audit — to answer "what's the status of task X", query Feishu, not local state.
+2. **Local state is cache, not truth.** Anything in `~/.roostery/` (Rust era; Python era used `~/.feishu_hub/`) is replayable audit — to answer "what's the status of task X", query Feishu, not local state.
 3. **`llm_summary` is the only module allowed to import an external LLM client.** Other modules stay vendor-neutral.
 4. **lark-cli pinned at 1.0.28** (timestamp schema compatibility). Higher versions must pass smoke first.
 5. **Smoke is the upgrade gate**. Any probe failure → `roostery init` and `daily_report` refuse to run.
