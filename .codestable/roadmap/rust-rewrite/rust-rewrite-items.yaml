@@ -53,8 +53,8 @@ items:
   - slug: lark-cli-shim
     description: bin/shim 独立二进制，PATH-prefix shim 透传真 lark-cli 并写 journal
     depends_on: [lark-cli-wrapper, journal-core]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-17-lark-cli-shim
     minimal_loop: false
     notes: "Phase 2；shim 是 ~/.local/bin/lark-cli 装机点，agent runtime 调 lark-cli 必经"
 
