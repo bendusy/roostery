@@ -115,21 +115,65 @@ Roostery Rust
 ```rust
 #[async_trait::async_trait]
 pub trait LarkRunner: Send + Sync {
-    async fn run(&self, args: &[&str]) -> Result<serde_json::Value, LarkError>;
+    /// 最简调用形态。args[0] 是 lark-cli 子命令（如 "im"）。
+    async fn run(&self, args: &[&str]) -> Result<serde_json::Value, LarkError> {
+        self.run_with_options(args, RunOptions::default()).await
+    }
+
+    /// 高级场景：自定义 timeout / stdin / profile。
+    async fn run_with_options(
+        &self,
+        args: &[&str],
+        opts: RunOptions,
+    ) -> Result<serde_json::Value, LarkError>;
 }
 
-pub struct LarkError {
-    pub kind: LarkErrorKind,
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: Option<i32>,
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    pub timeout: Option<std::time::Duration>,  // None = 用实现的默认值
+    pub stdin: Option<String>,
+    pub profile: Option<String>,                // lark-cli --profile global flag
 }
 
-pub enum LarkErrorKind {
-    Spawn,              // subprocess 启动失败
-    NonZeroExit,        // lark-cli 退出码非 0
-    OutputParse,        // stdout 不是合法 JSON
-    Timeout,            // 超出 timeout
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum LarkError {
+    #[error("failed to spawn lark-cli at {path:?}: {source}")]
+    Spawn {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("lark-cli exited {exit_code} (body code {body_code:?}): {message}")]
+    NonZeroExit {
+        exit_code: i32,
+        body_code: Option<i64>,    // 解出来的飞书业务码（含 transient codes）
+        message: String,
+        stdout: String,
+        stderr: String,
+    },
+
+    #[error("lark-cli stdout is not valid JSON: {source}")]
+    OutputParse {
+        #[source]
+        source: serde_json::Error,
+        stdout: String,
+    },
+
+    #[error("lark-cli timed out after {timeout_ms}ms")]
+    Timeout { timeout_ms: u64 },
+}
+
+impl LarkError {
+    /// 提示给 caller 的"是否值得重试"——本契约自身不重试，retry 策略归 dispatcher。
+    pub fn retriable(&self) -> bool {
+        matches!(self,
+            Self::Timeout { .. }
+            | Self::NonZeroExit { exit_code: 124, .. }
+            | Self::NonZeroExit { body_code: Some(99991663 | 99991664), .. }
+        )
+    }
 }
 ```
 
@@ -137,7 +181,12 @@ pub enum LarkErrorKind {
 - 所有走向飞书的调用必须通过这个 trait——不允许直接 `tokio::process::Command::spawn` 调 `lark-cli`
 - `args` 第一个元素是 lark-cli 子命令（如 `"im"`），后续是参数；调用方不传 `lark-cli` 本身的路径
 - 返回的 `serde_json::Value` 是 lark-cli stdout 解析后的 JSON Value，调用方负责按 schema 抽字段
-- 实现负责调用前后写 `JournalEntry`（见 §4.2）；mock 实现可跳过
+- 实现写 `JournalEntry`（见 §4.2）通过 **`Journaled<R: LarkRunner>` 装饰器** 完成（解耦 subprocess 实现与 journal 写入）；mock / 直接 LarkCli 不带 journal 行为，需要时显式 wrap
+- `LarkError` 是 `#[non_exhaustive]` rich enum——caller 必须用 `match` 显式处理或 `_ =>`；新增变体不破坏二进制兼容
+- `LarkError::retriable()` 是函数（match 表达式），不是字段——避免构造时 retriable 与 variant 数据不一致
+
+**契约演化记录**：
+- **2026-05-16**（lark-cli-wrapper feature design 阶段）：原 struct + C-style discriminator + flat fields 形态升级为 `#[non_exhaustive]` rich enum + thiserror，每变体携带各自数据；retry 策略明确归 dispatcher（caller 通过 `LarkError::retriable()` 拿提示）；新增 `run_with_options` 第二 method + `RunOptions` 应对 timeout / stdin / profile；新增 `Journaled<R>` 装饰器约定（解耦 journal 写入与 subprocess 实现）。理由：lark-cli-wrapper 是首个实现者 0 下游 caller 受影响，趁 cheap 把 Rust 错误类型 idiom 拉满
 
 ### 4.2 `JournalEntry` schema（**portable-by-default 的契约载体**）
 
