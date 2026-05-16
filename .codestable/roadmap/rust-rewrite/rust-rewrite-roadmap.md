@@ -314,12 +314,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
    - 对应 feature：`2026-05-15-core-redact`（commit `1e392e5` / CI run #25914996799 全绿）
    - 备注：Phase 1；Python 版作 reference，SENSITIVE_KEYS 11 个（Python 7 + 扩展 4：password/secret/cookie/private_key）
 
-3. **`core-remoterefs`** — `remoterefs` 模块，regex 从 lark-cli stdout 抽 `doc_token` / `record_id` 等
+3. **`core-remoterefs`** — `remoterefs` 模块，JSON walk + match-dispatch 从 lark-cli stdout 抽 9 个 newtype token（MessageId / DocToken / FolderToken / RecordId / ChatId / AppToken / WikiToken / TaskId / ThreadId）
    - 所属模块：A
    - 依赖：`rust-scaffold`
-   - 状态：planned
-   - 主要支持的 req：—（基础设施）
-   - 备注：Phase 1；Python 版 reference
+   - 状态：**done**（feature `2026-05-16-core-remoterefs`，commit `4714683`）
+   - 主要支持的 req：**`portable-by-default`**（让 journal entry 携带远端 token 便于审计/检索）
+   - 备注：Phase 1；newtype + `#[serde(transparent)]` 隔离 9 种 token 类型（Python parity 4 + 业界 3 + Phase 5 必需 2 = 9）；JSON walk + match-dispatch 取代 Python `Dict[str, Optional[str]]` 弱类型；walk 深度上限 64；首匹配赢按 BTreeMap 字典序
 
 ### Module B · 本地审计
 

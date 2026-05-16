@@ -4,7 +4,7 @@ slug: portable-by-default
 pitch: 你的 agent 工作痕迹在本地——飞书出问题 / 想换平台 / 自建前端都能继续用。Roostery 是中立中间件，不是飞书附属。
 status: draft
 last_reviewed: 2026-05-16
-implemented_by: [2026-05-15-core-redact, 2026-05-15-journal-core]
+implemented_by: [2026-05-15-core-redact, 2026-05-15-journal-core, 2026-05-16-core-remoterefs]
 tags: [portability, vendor-neutral, local-first, escape-hatch]
 ---
 
@@ -60,3 +60,4 @@ journal 的 schema 公开、稳定（每行带 version 标记）。这意味着�
 
 - **2026-05-16** · `journal-core` 落地（commit `b9ac5be`）：`JournalEntry` schema_version=1 对外公开承诺正式生效，jsonl 写入侧基础设施 + ULID `event_id` + UTC 日切 rotation + redact 集成完成。**写入侧 req 已兑现**；read/replay API + 跨设备 / 自建 view 的具体落地仍待后续 phase——req 保持 `draft` 直至这些场景出现具体可消费的工具
 - **2026-05-15** · `core-redact` 落地（commit `1e392e5`）：`scrub_value` / `scrub_argv` / `scrub_text` + `MASK` + 11 个 `SENSITIVE_KEYS`。兑现"基础脱敏"边界；为 journal 写入提供 logging-boundary 脱敏前置
+- **2026-05-16** · `core-remoterefs` 落地（commit `4714683`）：9 个 newtype token（含 Phase 5 必需的 TaskId/ThreadId）+ `RemoteRefs` 容器 + `extract` API。让 journal entry 携带远端对象 token 便于审计 / 检索；newtype + `#[serde(transparent)]` 保证 JSON 形态与 Python 兼容、Rust 类型隔离 cross-wiring bug 编译期拦截。req 仍保持 `draft`——read/replay 工具未落地

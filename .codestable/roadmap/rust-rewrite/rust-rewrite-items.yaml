@@ -19,9 +19,9 @@ items:
     notes: "Phase 1；Python 版作 reference，行为以接口契约 + portable-by-default 边界为准；SENSITIVE_KEYS 11 个（Python 7 + 扩展 4：password/secret/cookie/private_key）。Accepted 2026-05-15（commit 1e392e5，CI run #25914996799）"
 
   - slug: core-remoterefs
-    description: remoterefs 模块，regex 从 lark-cli stdout 抽 doc_token / record_id 等
+    description: remoterefs 模块，JSON walk + match-dispatch 从 lark-cli stdout 抽 9 个 newtype token
     depends_on: [rust-scaffold]
-    status: in-progress
+    status: done
     feature: 2026-05-16-core-remoterefs
     minimal_loop: false
     notes: "Phase 1；Python 版 reference"

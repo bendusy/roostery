@@ -36,6 +36,7 @@
 | `MASK` | redact 模块的脱敏占位字符串，固定为 `"***"`（`crates/roostery/src/redact.rs`，Phase 1 落地） |
 | `SENSITIVE_KEYS` | redact 模块默认敏感字段名列表（11 个：7 个 Python parity + 4 个业界扩展 `password` / `secret` / `cookie` / `private_key`），归一化后比较 |
 | Logging-boundary scrubber | redact 模块的定位：对**已 flow 到 logging 边界的数据**做脱敏。与 `redact::Secret<T>` / `secrecy::SecretString` 等 in-memory wrapper crate 不同层——本项目本 phase 不引入这类 wrapper |
+| Newtype token | remoterefs 模块的 9 个独立类型（`MessageId` / `DocToken` / `FolderToken` / `RecordId` / `ChatId` / `AppToken` / `WikiToken` / `TaskId` / `ThreadId`），全部 `#[serde(transparent)]`——JSON 形态裸字符串与 Python 版兼容，Rust 类型互不兼容，下游 cross-wiring bug 编译期拦截。`RemoteRefs` 容器 `#[non_exhaustive]` 防外部 struct literal 构造 |
 
 ### State ownership
 
@@ -56,7 +57,7 @@
 > Phase 0（rust-scaffold，本 feature）落地时 `crates/roostery/src/` 仅有 `main.rs` + `lib.rs`。下表是 **target architecture**，每个 Phase 的 feature 落地时实际 Rust 文件才出现。
 
 ### Module A · 基础工具（Phase 1）
-纯数据操作。`schema` 常量、`redact`（敏感字段脱敏）、`remoterefs`（regex 抽 `doc_token` / `record_id`）。
+纯数据操作。`schema` 常量、`redact`（敏感字段脱敏）、`remoterefs`（JSON walk + match-dispatch 抽 9 个 newtype token）。
 
 **redact 模块**（已落地，commit `1e392e5`，Phase 1）：
 
@@ -66,7 +67,17 @@
 - **下游使用约束**：`journal-core`（Phase 1）/ `lark-cli-shim`（Phase 2）/ `bot-task-writer`（Phase 5）等所有写 journal 的模块**必经此模块脱敏**（见 roadmap §4.2 JournalEntry schema 契约）
 - 定位：logging-boundary scrubber，**不替代** in-memory secret wrapper（`Secret<T>` 类）；未来 Module D Config 持有 secret 字段时单独引 `redact` crate
 
-- 子 feature：`rust-scaffold` / **`core-redact`（done）** / `core-remoterefs`
+**remoterefs 模块**（已落地，commit `4714683`，Phase 1）：
+
+- 公开类型：9 个 `#[serde(transparent)]` newtype token —— `MessageId` / `DocToken` / `FolderToken` / `RecordId` / `ChatId` / `AppToken` / `WikiToken` / `TaskId` / `ThreadId`（每个都额外 impl `AsRef<str>` + `Display`，caller 拼 URL/log 不用 `.0`）；JSON 形态是裸字符串（与 Python 版兼容），Rust 类型互不兼容
+- 公开容器：`RemoteRefs` struct + `#[non_exhaustive]` + 每字段 `Option<Token> + skip_serializing_if`——加字段不破坏外部 caller；全 None serialize 为 `{}`
+- 公开 API：`extract(argv: &[String], stdout: &str) -> RemoteRefs`——单一入口，best-effort，**永不 panic / 永不返 Result**；所有失败路径返 `RemoteRefs::default()`
+- 实现策略：单趟 match-walk 直接 in-place 填字段（不引中间 HashMap 聚合）；同 key 多匹配靠 `is_none()` guard 显式首匹配赢；walk 深度上限 64（防御深嵌套栈溢出）
+- Sibling-key 顺序契约：由 serde_json `Map` 默认 BTreeMap 字典序决定，**不承诺 stdout 物理顺序**——依赖物理顺序的下游 caller 应自己 parse 不依赖 RemoteRefs
+- **类型隔离编译期保证**：下游函数签名 `fn send(msg: &MessageId)` 物理上无法接 `&DocToken` 等其他 8 种 token；cross-wiring bug 编译期拦截（compile_fail,E0308 doctest 守护）
+- **下游使用约定**：Phase 2 `lark-cli-shim` / `LarkCli` wrapper 等写 journal 前自己调 `remoterefs::extract` 把结果塞 `entry.params.remote_refs` 子字段；`Journal::append` 不内建集成（关注点分离，与 redact 同口径）
+
+- 子 feature：`rust-scaffold` / **`core-redact`（done）** / **`core-remoterefs`（done）**
 
 ### Module B · 本地审计 / Journal（Phase 1）
 本地 jsonl audit / replay。`JournalEntry` schema 是 `portable-by-default` req 的契约载体（公开、稳定、可移植）。
@@ -78,6 +89,7 @@
 - 写入语义：同步、`OpenOptions::append+create` + 单 `write_all`，POSIX <PIPE_BUF 原子；文件名按 `entry.ts`（UTC 日）= `YYYY-MM-DD.jsonl`，跨午夜 backfill 落到正确日；mkdir -p 自动建目录
 - **schema_version=1 公开承诺**：本模块落地起，字段名 / 类型 / 序列化形态变更需 bump + 兼容旧版 deserialize + `cs-roadmap update` 评估 portable-by-default 影响
 - **下游使用约束**：`params` 字段在 caller 侧用 `redact::scrub_value` 脱敏后填入；`Journal::append` 不内建脱敏（关注点分离）
+- **remoterefs 集成约定**：同理，caller 自己调 `remoterefs::extract(argv, stdout)` 把结果塞 `entry.params.remote_refs` 子字段；`Journal::append` 不感知 RemoteRefs 类型——9 个 newtype token（MessageId / DocToken / 等）的 JSON 形态因 `#[serde(transparent)]` 保持裸字符串与 Python 版兼容
 - 路径解析单独成 `paths` 模块（`roostery_home()` / `journal_dir()`）；env 覆盖走 `ROOSTERY_HOME`，**不读** legacy `FEISHU_HUB_HOME`
 - 不在范围（Phase 1）：read / replay API、size/never rotation 策略、跨进程 flock、Python jsonl 迁移工具——后续 phase 起独立 feature
 
@@ -131,6 +143,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 3. **`lark-cli` 是唯一飞书入口**。不允许新增 HTTP client 直连 `open.feishu.cn`
 4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge` + 模板嵌入扩展，loop 不感知 provider
 5. **`llm_summary` 模块是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral
+6. **业务标识符 newtype 隔离**（自 core-remoterefs 起）：对**从飞书侧拿到的、有明确业务语义角色的标识符**（token / id / cursor）一律用 newtype + `#[serde(transparent)]` 隔离类型；不实现互转 `From` impl。Phase 4 dispatcher 的 `TraceId` / `EventId` / `ParentEventId` 是合格候选；**不**适用于"还没成为业务 token 的字符串"（subcommand 名 / 原始 argv / 普通 String 参数）——后者 newtype 化是 noise。详见 `.codestable/compound/` 待归档 convention
 
 ## 6. 已知约束 / 硬边界
 

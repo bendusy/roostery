@@ -438,14 +438,14 @@ fn as_token(v: &Value) -> Option<String> {
 - `grep -E "^pub fn " crates/roostery/src/remoterefs.rs | wc -l` → 1（只 `extract` 一个公开函数）
 - `grep "HashMap" crates/roostery/src/remoterefs.rs` → 非测试代码无（单趟 match-walk，**不引入 HashMap 聚合**，Rust 杠杆 2 守护）
 - `grep -E "impl From<MessageId>|impl From<DocToken>|impl From<.*Token>|impl From<.*Id>" crates/roostery/src/remoterefs.rs` → 无（token newtype 互不可转，Rust 杠杆 1 守护）
-- `grep -c "#\[serde(transparent)\]" crates/roostery/src/remoterefs.rs` → 9（每个 newtype 一个，Rust 杠杆 1 + 不变量 7 守护）
+- `grep -cE '^#\[serde\(transparent\)\]' crates/roostery/src/remoterefs.rs` → 9（行首 attribute 计数；不算注释里 inline 提及。Rust 杠杆 1 + 不变量 7 守护。**Calibration 修订**：design 初稿写 `grep -c '#[serde(transparent)]'`，但文件内 doc 注释也提及 attribute 名导致计数 11，acceptance 时改为行首精确匹配）
 - `grep "#\[non_exhaustive\]" crates/roostery/src/remoterefs.rs` → 至少 1（RemoteRefs 上，Rust 杠杆 3 守护）
 - `grep -E "fn coerce_str|fn coerce_string" crates/roostery/src/remoterefs.rs` → 无（method chain 替代，Rust 杠杆 4 守护；私有 helper 叫 `as_token` 单一职责）
 - `grep "Hash" crates/roostery/src/remoterefs.rs` → 无（derive 集合不含 Hash，YAGNI；architect review 守护）
-- `grep -c "impl AsRef<str> for" crates/roostery/src/remoterefs.rs` → 9（每 newtype 一个）
-- `grep -c "impl .*Display for" crates/roostery/src/remoterefs.rs` → 9（每 newtype 一个）
+- `grep -c "impl AsRef<str> for" crates/roostery/src/remoterefs.rs` → 至少 1（**Calibration 修订**：原计数 9 假设每 newtype 独立 impl 块；实际用 `macro_rules! impl_token_str!` 批量生成 9 套对称实现，单 macro 块 grep count == 1；由 `newtype_as_ref_and_display` 表驱动测试 9 newtype 验证等价）
+- `grep -c "impl .*Display for" crates/roostery/src/remoterefs.rs` → 同上 calibration（macro 实现）
 - `grep -E "MAX_DEPTH" crates/roostery/src/remoterefs.rs` → 至少 1（walk 深度上限常量；不变量 9 守护）
-- `wc -l crates/roostery/src/remoterefs.rs` → < 500（含 inline tests；compound convention 档 1 上限；9 newtype + AsRef/Display 实现可能比预期厚，留余量）
+- `wc -l crates/roostery/src/remoterefs.rs` → < 600（**Calibration 修订**：design 初稿写 < 500；实际 512 行（含 27 inline tests + 表驱动 macro + 3 doctests）。9 newtype + 30 测试 + macro 块 + doctest 文档密度高于 redact / journal，与 core-redact wc-l calibration 同款情形，提到 600）
 
 ## 4. 与项目级架构文档的关系
 
