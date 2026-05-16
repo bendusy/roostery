@@ -191,22 +191,18 @@ mod tests {
 
     /// Write a shell script under tempdir, chmod +x, return path.
     ///
-    /// File handle is explicitly dropped before returning — Linux rejects
-    /// `execve` on a file that's still open for writing with ETXTBSY
-    /// (`ExecutableFileBusy`). macOS doesn't enforce this, so the bug
-    /// is invisible locally on Darwin but bites in CI on Linux.
+    /// Uses `std::fs::write` (closes fd atomically before return) instead
+    /// of `File::create + write_all + drop` — Linux can reject `execve`
+    /// on a recently-written file with `ExecutableFileBusy` (ETXTBSY) if
+    /// the kernel's write-reference lingers past the close syscall.
+    /// macOS doesn't enforce this so the bug is invisible on Darwin.
     fn fixture_script(body: &str) -> (tempfile::TempDir, PathBuf) {
-        use std::io::Write as _;
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fake-lark-cli");
-        {
-            let mut f = std::fs::File::create(&path).unwrap();
-            writeln!(f, "#!/bin/sh").unwrap();
-            f.write_all(body.as_bytes()).unwrap();
-            f.sync_all().unwrap();
-            // f drops here, releasing the write fd before chmod / execve.
-        }
+        let mut content = String::from("#!/bin/sh\n");
+        content.push_str(body);
+        std::fs::write(&path, content).unwrap();
         let mut perm = std::fs::metadata(&path).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&path, perm).unwrap();
