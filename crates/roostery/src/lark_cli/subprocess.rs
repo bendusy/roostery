@@ -190,15 +190,24 @@ mod tests {
     use serde_json::json;
 
     /// Write a shell script under tempdir, chmod +x, return path.
+    ///
+    /// File handle is explicitly dropped before returning — Linux rejects
+    /// `execve` on a file that's still open for writing with ETXTBSY
+    /// (`ExecutableFileBusy`). macOS doesn't enforce this, so the bug
+    /// is invisible locally on Darwin but bites in CI on Linux.
     fn fixture_script(body: &str) -> (tempfile::TempDir, PathBuf) {
         use std::io::Write as _;
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fake-lark-cli");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(f, "#!/bin/sh").unwrap();
-        f.write_all(body.as_bytes()).unwrap();
-        let mut perm = f.metadata().unwrap().permissions();
+        {
+            let mut f = std::fs::File::create(&path).unwrap();
+            writeln!(f, "#!/bin/sh").unwrap();
+            f.write_all(body.as_bytes()).unwrap();
+            f.sync_all().unwrap();
+            // f drops here, releasing the write fd before chmod / execve.
+        }
+        let mut perm = std::fs::metadata(&path).unwrap().permissions();
         perm.set_mode(0o755);
         std::fs::set_permissions(&path, perm).unwrap();
         (dir, path)
