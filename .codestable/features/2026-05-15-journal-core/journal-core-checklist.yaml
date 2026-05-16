@@ -1,0 +1,160 @@
+feature: 2026-05-15-journal-core
+created: 2026-05-16
+
+steps:
+  - action: "依赖 + 模块骨架：Cargo.toml 加 serde（derive）+ chrono（serde + clock）；建 crates/roostery/src/journal.rs 与 paths.rs，声明 JournalEntry / JournalResult / Journal / new_event_id / JournalEntry::new / roostery_home / journal_dir 全部签名 todo!()；lib.rs 加 pub mod journal; pub mod paths;"
+    exit_signal: "cargo build 成功；cargo test --all 仍 0 passed 0 failed；clippy 不报新错"
+    status: done
+
+  - action: "paths 模块 + 单测：实现 roostery_home（ROOSTERY_HOME env > home_dir().join('.roostery') > cwd 兜底）+ journal_dir；不读 FEISHU_HUB_HOME"
+    exit_signal: "cargo test paths::tests 至少 2 case 通过（env override / default）；S3.1-S3.3 全过"
+    status: done
+
+  - action: "Schema 类型 + 序列化测试：JournalEntry / JournalResult derive Serialize/Deserialize/Debug/Clone/PartialEq；JournalResult 用 #[serde(tag = \"outcome\", rename_all = \"lowercase\")]；写 schema roundtrip + JournalResult 形态 golden assertion"
+    exit_signal: "cargo test journal::tests::schema 至少 2 case 通过；S1.1-S1.5 全过；JSON 形态匹配 roadmap §4.2 sample"
+    status: done
+
+  - action: "ULID 实现 + 单测：new_event_id() 用 10 字节 time + 10 字节 random + Crockford base32 编码（参考 legacy/python/src/roostery/journal.py:27-39）；不引 ulid/uuid crate"
+    exit_signal: "cargo test journal::tests::ulid 至少 2 case 通过；S2.1-S2.4 全过（长度 26 / 字符集 / 同毫秒 unique / 跨毫秒时间序）"
+    status: done
+
+  - action: "Journal::open + append 实现 + 单测：JournalEntry::new 关联函数填默认值；Journal handle + append（OpenOptions::append+create+open + serde_json::to_vec + 单次 write_all）+ mkdir -p + 文件名按 entry.ts UTC 日；dev-deps 加 tempfile"
+    exit_signal: "cargo test journal::tests::append 至少 3 case 通过；S4.1-S4.5 全过（基本写入 / 跨日 backfill / mkdir -p / 多行 jsonl / 返回路径）"
+    status: done
+
+  - action: "Redact 集成测试 + 模块级 lint：写一条集成测试构造 entry.params = redact::scrub_value(&json!({\"access_token\":\"xyz\",\"user\":\"alice\"})).0，append 后读回断言脱敏生效；跑 cargo test --all + clippy + fmt 三命令"
+    exit_signal: "S5.1 通过；本地三命令全绿；推 commit 后 GitHub Actions fmt/clippy/test 三 job 全绿"
+    status: done
+
+checks:
+  - item: "JournalEntry 字段名 / 顺序 / 类型与 roadmap §4.2 完全一致（11 字段：schema_version / event_id / trace_id / parent_event_id / depth / ts / source / action / params / result / duration_ms）"
+    source: 名词契约
+    status: done
+
+  - item: "JournalResult 是 #[serde(tag = \"outcome\", rename_all = \"lowercase\")] enum，两个变体 Ok { value } / Err { kind, message }"
+    source: 名词契约
+    status: done
+
+  - item: "Journal::open 签名：(impl Into<PathBuf>) -> Self；append 签名：(&self, &JournalEntry) -> std::io::Result<PathBuf>；Journal::default() 走 paths::journal_dir()"
+    source: 名词契约
+    status: done
+
+  - item: "JournalEntry::new(source, action) 关联函数填默认：event_id 新生成、ts=Utc::now、depth=0、其余 Option=None、params=Value::Null、result=Ok(Null)、duration_ms=0、schema_version=SCHEMA_VERSION（=1）"
+    source: 名词契约
+    status: done
+
+  - item: "new_event_id() 长度 26 + Crockford base32 字母表 + 同毫秒 unique + 时间分量按毫秒递增"
+    source: 名词契约
+    status: done
+
+  - item: "roostery_home() 三段回退：$ROOSTERY_HOME > dirs::home_dir().join('.roostery') > CWD/.roostery；不读 FEISHU_HUB_HOME"
+    source: 名词契约
+    status: done
+
+  - item: "不变量 1：append 失败不写半行（单 write_all syscall + POSIX <PIPE_BUF 原子）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 2：多进程并发 append 不互相截断（O_APPEND 语义，best-effort 超 PIPE_BUF）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 3：ts UTC + 文件名 UTC 日切；跨午夜 backfill 落到正确日（S4.2）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 4：schema_version=1 公开承诺；本 feature 落地后改字段需 bump + 旧版兼容反序列化 + cs-roadmap update"
+    source: 流程级约束
+    status: done
+
+  - item: "错误语义：append 仅返 std::io::Result；serialize 失败 panic（programmer error）；caller 无 retry 责任"
+    source: 流程级约束
+    status: done
+
+  - item: "挂载点 1：crates/roostery/src/journal.rs 文件存在且含 JournalEntry / JournalResult / Journal / new_event_id"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 2：crates/roostery/src/paths.rs 文件存在且含 roostery_home / journal_dir"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 3：crates/roostery/src/lib.rs 含 pub mod journal; pub mod paths;"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 4：crates/roostery/Cargo.toml [dependencies] 含 serde（derive feature）+ chrono（serde + clock feature）"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 5：lib.rs 中 SCHEMA_VERSION == 1 未被改动；JournalEntry::new(...) 生成的 entry schema_version == 1"
+    source: 挂载点
+    status: done
+
+  - item: "范围守护：grep -E 'fn read_day|fn replay|fn read_entries' crates/roostery/src/journal.rs → 无（不实现读 / replay）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'async fn|use tokio' crates/roostery/src/journal.rs crates/roostery/src/paths.rs → 无（同步纯 IO）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'FEISHU_HUB_HOME' crates/roostery/src/ → 无运行时引用（注释里描述可以）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E '^ulid = |^uuid = ' crates/roostery/Cargo.toml → 无（自实现 ULID）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'tracing-appender|^slog' crates/roostery/Cargo.toml → 无（不引第三方 jsonl crate）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：非测试 / 非注释代码无 size:{MB} / never rotation 字面值（Phase 1 仅 daily）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：journal.rs / paths.rs 非测试代码 panic/unwrap 仅 1 处允许：serde_json::to_vec(&entry).expect(\"JournalEntry serializes\")"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：wc -l crates/roostery/src/journal.rs < 400；wc -l crates/roostery/src/paths.rs < 100"
+    source: 范围守护
+    status: done
+
+  - item: "验收场景 S1.1-S1.5：JournalEntry / JournalResult schema roundtrip + 字段名集合 + tag/rename 形态 + ts RFC 3339 全部通过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S2.1-S2.4：ULID 长度 / 字母表 / 同毫秒 unique / 跨毫秒时间序 4 个 case 通过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S3.1-S3.3：paths env override / default home / 不读 FEISHU_HUB_HOME 3 个 case 通过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S4.1-S4.5：append 基本写入 / 跨日 backfill / mkdir -p / 多行 jsonl / 返回路径 5 个 case 通过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S5.1：redact 集成 — scrub_value 处理后的 params 落盘并能回读断言脱敏生效"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S6.1：cargo test --all 全绿，本 feature 新增测试 ≥ 6 个"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S6.2-S6.3：cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 通过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S6.4：SCHEMA_VERSION == 1 + JournalEntry::new(...).schema_version == 1"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景：GitHub Actions fmt/clippy/test 三个 job 全绿"
+    source: 验收场景
+    status: done
