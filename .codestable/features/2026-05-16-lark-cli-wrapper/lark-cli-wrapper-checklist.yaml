@@ -1,0 +1,252 @@
+feature: 2026-05-16-lark-cli-wrapper
+created: 2026-05-16
+
+steps:
+  - action: "结构升档（独立 commit）：建 crates/roostery/src/lark_cli/ 子目录 + 6 空文件（mod.rs + runner.rs + error.rs + subprocess.rs + mock.rs + journaled.rs）每个仅 module-level doc 注释；lib.rs 加 pub mod lark_cli;；Cargo.toml 加 tokio = { version = \"1\", features = [\"full\"] } + async-trait = \"0.1\" + thiserror = \"1\" + tracing = \"0.1\""
+    exit_signal: "cargo build 成功；cargo test --all 仍跑通既有 99 测试无回归；独立 commit 标 'chore(lark-cli): scaffold module subdir (Phase 2 升档 2)'"
+    status: pending
+
+  - action: "类型骨架：runner.rs 实现 LarkRunner trait（含 run 默认 method 委托 run_with_options）+ RunOptions struct（#[non_exhaustive]，3 字段 timeout/stdin/profile）；error.rs 实现 LarkError #[non_exhaustive] rich enum 4 变体（Spawn { path, program_args, source: io::Error } / NonZeroExit { exit_code, body_code, message, stdout, stderr } / OutputParse { source: serde_json::Error, stdout } / Timeout { timeout_ms }）+ thiserror derive + retriable() method matches! 实现 + MAX_FIELD_LEN_IN_ERR = 4096 常量；mod.rs pub use 暴露 + 顶部架构红线 docstring"
+    exit_signal: "cargo build 成功；类型可独立构造测试；retriable truth table 单测通过；Display 输出含变体专有数据；mod.rs docstring grep 命中 '飞书 syscall 唯一通道' + 'ARCHITECTURE.md §6'"
+    status: pending
+
+  - action: "LarkCli subprocess 实现：subprocess.rs 实现 LarkCli::new (env ROOSTERY_LARK_CLI_BIN > \"lark-cli\") + with_binary + with_default_timeout (30s default) + LarkRunner impl（spawn → stdin? → tokio::time::timeout 包裹 wait_with_output → exit code 分支 → JSON parse → 4KB 截断 stdout/stderr/program_args 进 LarkError）；timeout 触发必 kill child"
+    exit_signal: "LarkCli 编译通过；用伪 binary fixture（echo / sleep / cat / shell script）跑 happy + 4 错误路径基础 case"
+    status: pending
+
+  - action: "MockLarkRunner：mock.rs 实现 MockLarkRunner（Arc<Mutex<MockState>> 内部，state 含 VecDeque<Result> + Vec<Vec<String>> calls）+ enqueue_ok(&self, v) -> &Self / enqueue_err(&self, e) -> &Self fluent + calls() Vec 拷贝 + assert_no_unconsumed (panic) + Drop impl 未消费时 tracing::warn! (不 panic)；LarkRunner impl run_with_options pop_front 队列空时 panic；mock 模块默认 public（不 cfg gate）但模块 doc 标 'Test utility — production code should not depend on this'"
+    exit_signal: "mock 单测覆盖队列消费 / fluent 链 / calls 记录 / assert_no_unconsumed / Drop warn 行为 / panic on empty queue"
+    status: pending
+
+  - action: "Journaled 装饰器：journaled.rs 实现 Journaled<R: LarkRunner> { inner: R, journal: Journal, source: String } + new 构造方法 + LarkRunner impl run_with_options（Instant::now → inner.run_with_options await → duration_ms → 构造 JournalEntry: source / action = format!(\"lark-cli:{}\", args[0]) / params = json!({argv: redact::scrub_argv(args).0, options: ...}) / result Ok|Err / duration_ms → journal.append → 失败 tracing::warn! 不破坏原 result）；Err 路径 JournalResult::Err 只含 kind + message（不 clone 整个 LarkError 因 io::Error 不 Clone）"
+    exit_signal: "Journaled<MockLarkRunner> 集成测试 happy + Err 路径；journal 文件含 schema_version=1 entry params.argv 已脱敏 result 字段正确；写 journal 失败时 tracing::warn! 触发但原 result 不变"
+    status: pending
+
+  - action: "完整验收测试 + 集成验证：4 种 LarkErrorKind 路径用伪 binary 各 1 测试 + body_code 解析（99991663）+ retriable truth table 8 行 + dyn-compatible (Box<dyn LarkRunner>) + sibling/edge 场景 + timeout PID kill -0 验证 + non_exhaustive match 编译期保证 + non_exhaustive RunOptions struct literal 守护；cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令全绿；cargo tree | grep -c openssl == 0 守护；推 CI 验三 job"
+    exit_signal: "33 验收场景全过；本地四命令全绿；远端 CI 全绿；openssl 守护通过"
+    status: pending
+
+checks:
+  - item: "LarkRunner trait 含 run（默认实现委托）+ run_with_options（必实现）；trait Send + Sync；async_trait macro 应用"
+    source: 名词契约
+    status: pending
+
+  - item: "RunOptions struct 含 timeout: Option<Duration> / stdin: Option<String> / profile: Option<String> + #[non_exhaustive] + Default derive"
+    source: 名词契约
+    status: pending
+
+  - item: "LarkError 是 #[non_exhaustive] rich enum 4 变体；每变体携带专有数据；thiserror Error derive；不手写 Display/Error impl"
+    source: 名词契约
+    status: pending
+
+  - item: "LarkError::retriable() 是 method 不是字段；matches! truth table 实现"
+    source: 名词契约
+    status: pending
+
+  - item: "MAX_FIELD_LEN_IN_ERR = 4096 常量存在且 stdout/stderr/program_args 在错误构造时截断"
+    source: 名词契约
+    status: pending
+
+  - item: "LarkCli::new() 走 ROOSTERY_LARK_CLI_BIN env > 默认 \"lark-cli\"；不读 FEISHU_HUB_LARK_CLI_BIN；with_binary / with_default_timeout 显式构造；不实现 Default trait"
+    source: 名词契约
+    status: pending
+
+  - item: "MockLarkRunner enqueue_ok / enqueue_err 返 &Self fluent；calls() Vec 拷贝；assert_no_unconsumed panic；Drop 未消费 tracing::warn! 不 panic"
+    source: 名词契约
+    status: pending
+
+  - item: "Journaled<R: LarkRunner> 泛型装饰器；new(inner, journal, source) 构造；不持有 Arc"
+    source: 名词契约
+    status: pending
+
+  - item: "不变量 1：trait run 默认实现委托 run_with_options；3 实现都不重写 run"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 2：所有 LarkError 严格归一到 4 个变体；不暴露 std::io / serde_json / tokio 类型给 caller match"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 3：Journaled 写 journal 失败 tracing::warn! 不破坏原 result"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 4：Journaled 写入前 params.argv 必经 redact::scrub_argv"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 5：MockLarkRunner 队列空 panic 而非默认返 Err"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 6：LarkCli timeout 必 kill child（PID + kill -0 验证 ESRCH）"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 7：LarkCli 不重试；retriable 仅作为 method 提示"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 8：subprocess stdout 为空时返 Value::Null（不报 OutputParse）"
+    source: 流程级约束
+    status: pending
+
+  - item: "挂载点 1：crates/roostery/src/lark_cli/ 目录存在含 mod.rs + 5 子文件"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 2：lib.rs 含 pub mod lark_cli;"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 3：Cargo.toml 含 tokio + async-trait + thiserror + tracing 4 依赖"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 4：mod.rs pub use runner::LarkRunner; 暴露"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 5：Journaled<R> 装饰器存在且可独立 wrap 任意 LarkRunner"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 6：LarkError 是 #[non_exhaustive] rich enum + thiserror derive（契约形态锁定）"
+    source: 挂载点
+    status: pending
+
+  - item: "范围守护：grep -rE 'fn im_|fn docs_|fn drive_|fn base_' crates/roostery/src/lark_cli/ → 无（不实现业务包裹）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -rE 'retry|retries|attempt' crates/roostery/src/lark_cli/ → 非测试 / 非注释代码无（不内置 retry）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -rE 'fn jq|--jq|jq_path' crates/roostery/src/lark_cli/ → 无（不实现 jq 选择器）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep 'Config' crates/roostery/src/lark_cli/ → 无（不读 Config）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep 'FEISHU_HUB_LARK_CLI_BIN' crates/roostery/src/lark_cli/ → 无运行时引用"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E '^use mockall|mockall::' → 无（不引 mockall）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep '^impl Default for LarkCli' → 无（不实现 Default）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'pub kind: LarkErrorKind|^pub enum LarkErrorKind\\b' → 无（rich enum 替代 C-style，杠杆 1）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'pub retriable:' error.rs → 无（retriable 是 method 不是字段，杠杆 3）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E '^pub fn retriable' error.rs → 1（method 存在）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -c '#[non_exhaustive]' error.rs → 至少 1（杠杆 2 LarkError）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -c '#[non_exhaustive]' runner.rs → 至少 1（RunOptions）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E '^use thiserror|thiserror::' error.rs → 至少 1"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'impl std::fmt::Display for LarkError|impl std::error::Error for LarkError' error.rs → 无（用 thiserror derive）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep MAX_FIELD_LEN_IN_ERR error.rs → 至少 1（4 KiB 截断常量）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -rE 'use eprintln|eprintln!' journaled.rs → 无（用 tracing::warn! 不用 eprintln，杠杆 12）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'tracing::warn!|tracing::error!' journaled.rs → 至少 1"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'use nix|nix::' Cargo.toml → 无（不引 nix crate）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -rE 'use reqwest|use ureq|use hyper::Client|use isahc' crates/ → 全仓库无（架构红线第 1 条）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep '^use tokio' subprocess.rs → 至少 1"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep '^use async_trait' runner.rs / 各 impl → 至少 1"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：wc -l 各子文件 < 400；总和 < 1200"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -c 'pub trait LarkRunner' runner.rs == 1（trait 定义唯一）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -cE '^impl LarkRunner for|impl<R: LarkRunner> LarkRunner for' lark_cli/ == 3（LarkCli + MockLarkRunner + Journaled<R>）"
+    source: 范围守护
+    status: pending
+
+  - item: "反向核对：roadmap §4.1 末尾'契约演化记录'段含 2026-05-16 条目"
+    source: 范围守护
+    status: pending
+
+  - item: "反向核对：lark_cli/mod.rs 顶部 docstring 含'飞书 syscall 唯一通道' + 'ARCHITECTURE.md §6 第 1 条'"
+    source: 范围守护
+    status: pending
+
+  - item: "验收场景 S1.1-S1.2：trait 默认 method 委托 + dyn-compatible (Box<dyn LarkRunner>) 全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S2.1-S2.8：LarkCli subprocess 8 case（happy / 空 stdout / 非 JSON / 退码非 0 / body_code 解析 / Spawn 失败 / Timeout + child kill / stdin / profile）全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S3.1：retriable() truth table 8 行（含正例 4 行 + 反例 4 行）全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S3.2-S3.4：non_exhaustive match _ 必需 / Display 含变体数据 / Error::source() 链 全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S4.1-S4.7：MockLarkRunner queue / fluent / panic / Drop warn 全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S5.1-S5.4：Journaled 集成 happy + Err + redact + 写 journal 失败 tracing::warn! 不破坏原 result 全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S6.1-S6.6：cargo test --all + --doc + clippy + fmt 四命令 + 架构红线 grep 守护 + openssl 守护 全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
+    source: 验收场景
+    status: pending
