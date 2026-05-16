@@ -21,8 +21,8 @@ items:
   - slug: core-remoterefs
     description: remoterefs 模块，regex 从 lark-cli stdout 抽 doc_token / record_id 等
     depends_on: [rust-scaffold]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-16-core-remoterefs
     minimal_loop: false
     notes: "Phase 1；Python 版 reference"
 

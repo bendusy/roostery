@@ -1,0 +1,188 @@
+feature: 2026-05-16-core-remoterefs
+created: 2026-05-16
+
+steps:
+  - action: "模块骨架 + 9 newtype + RemoteRefs：建 crates/roostery/src/remoterefs.rs；声明 9 个 unit struct (MessageId / DocToken / FolderToken / RecordId / ChatId / AppToken / WikiToken / TaskId / ThreadId) 全部 #[serde(transparent)] + derive (Serialize/Deserialize/Debug/Clone/PartialEq/Eq) 无 Hash；RemoteRefs struct 9 字段 #[non_exhaustive] + skip_serializing_if + Default；extract 签名 todo!()；lib.rs 加 pub mod remoterefs;"
+    exit_signal: "cargo build 成功；9 newtype 可独立构造；RemoteRefs::default() 可调；serialize 全 None RemoteRefs 输出 {}；serialize Some(MessageId(\"om_x\".into())) 输出裸 \"om_x\"（transparent 验证）"
+    status: done
+
+  - action: "每 newtype 加 AsRef<str> + fmt::Display impl：用 macro_rules! 批量生成 9 个对称实现避免 18 块样板"
+    exit_signal: "MessageId(\"x\".into()).as_ref() == \"x\"；format!(\"{}\", MessageId(\"x\".into())) == \"x\"；其余 8 个对称测试通过"
+    status: done
+
+  - action: "as_token helper + walk 函数骨架（含 depth 参数 + MAX_DEPTH=64）：实现私有 as_token(&Value) -> Option<String> 过滤空字符串；walk(&Value, depth: u32, bool, &mut RemoteRefs) 框架，depth > MAX_DEPTH 直接 return"
+    exit_signal: "cargo build 成功；walk 跑通 Object/Array 递归不 panic（占位测试）"
+    status: done
+
+  - action: "walk 主体 + extract 主路径：填 walk 的 10 个 match 分支（9 字段 + folder_token 的 token-on-create-folder 条件分支）；每分支 is_none() guard 显式首匹配赢；extract 计算 argv_create_folder bool flag + stdout 短路逻辑（trim 空 / 首字符非 {[/ from_str fail 都返 Default）+ depth=0 起调 walk"
+    exit_signal: "所有 happy（S1.1-S1.13 13 字段+alias）+ 嵌套 + Array + argv 消歧 + 错误兜底 case 通过"
+    status: done
+
+  - action: "类型隔离 compile_fail doctest + serialize roundtrip + sibling 顺序 + depth 限制测试：(a) compile_fail,E0308 doctest 证明 MessageId 不能传给 &DocToken 签名；(b) compile_fail,E0063 doctest 证明 RemoteRefs struct literal 缺字段且无 ..Default::default() 编译失败；(c) serialize roundtrip 证 transparent 形态稳定；(d) sibling-key 字典序断言（{\"b\":...,\"a\":...} 取 \"a\" 的值）；(e) doc_token 三 alias 同时出现取字典序首位；(f) 100 层深嵌套不 panic，浅层（<64）字段抽到，深层（>64）抽不到"
+    exit_signal: "所有验收场景 S2.5/S2.6/S3.2/S4.1/S5.1-S5.6 测试通过；cargo test --doc 全绿"
+    status: done
+
+  - action: "集成验证：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令全绿；推 CI"
+    exit_signal: "本地四命令全绿；推 commit 后 GitHub Actions fmt/clippy/test 三 job 全绿"
+    status: done
+
+checks:
+  - item: "9 个 newtype 都 #[serde(transparent)] + derive (Serialize/Deserialize/Debug/Clone/PartialEq/Eq) 无 Hash"
+    source: 名词契约
+    status: done
+
+  - item: "RemoteRefs 9 字段 + #[non_exhaustive] + 每字段 #[serde(skip_serializing_if = \"Option::is_none\")] + Default derive"
+    source: 名词契约
+    status: done
+
+  - item: "extract 签名：(argv: &[String], stdout: &str) -> RemoteRefs；永不 panic 永不返 Result；私有 walk(depth) + as_token helper 不暴露"
+    source: 名词契约
+    status: done
+
+  - item: "每 newtype impl AsRef<str> + fmt::Display；不实现任何 From<TokenA> for TokenB 互转"
+    source: 名词契约
+    status: done
+
+  - item: "walk 用单趟 match-walk in-place 填 refs；同 key 多匹配靠 is_none() guard 首匹配赢；不引入 HashMap<String, Vec<Value>> 中间聚合"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 1：extract 永不 panic / 永不返 Result（所有失败路径返 RemoteRefs::default()）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 2：纯函数无副作用（接 & 借用返 owned）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 6：编译期类型隔离（compile_fail,E0308 doctest 守护）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 7：transparent 序列化形态与 Python 兼容（裸字符串非嵌套对象）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 8：sibling-key walk 顺序由 serde_json Map 默认 BTreeMap 字典序决定；不承诺 stdout 物理顺序（S2.5/S2.6 锁定）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 9：walk 深度上限 64，超出直接 return 已填字段保留；防御深嵌套栈溢出（S3.2 锁定）"
+    source: 流程级约束
+    status: done
+
+  - item: "挂载点 1：crates/roostery/src/remoterefs.rs 文件存在且含 9 newtype + RemoteRefs + extract"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 2：lib.rs 含 pub mod remoterefs;"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 3：RemoteRefs derive Serialize + Deserialize + Default"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 4：9 个 newtype 都有 #[serde(transparent)]（grep -c 应 == 9）"
+    source: 挂载点
+    status: done
+
+  - item: "挂载点 5：RemoteRefs 上有 #[non_exhaustive]"
+    source: 挂载点
+    status: done
+
+  - item: "范围守护：grep -E '^use regex|regex::' → 无（不用 regex）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'async fn|use tokio' → 无（同步纯函数）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'Result<RemoteRefs|-> Result<' → 无（extract 不返 Result）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'panic!|\\.unwrap\\(\\)' 非测试代码无"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'fn merge|fn diff|fn is_empty' → 无（不实现附加方法）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep 'use crate::redact' → 无（不依赖 redact）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep 'Config' → 无（不读 Config）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E '^pub fn ' wc -l == 1（只 extract 一个公开函数）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep 'HashMap' 非测试代码无（不引入聚合中间态）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'impl From<.*Token>|impl From<.*Id>' → 无（72 个互转 impl 均不存在）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -c '#[serde(transparent)]' == 9"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep '#[non_exhaustive]' ≥ 1"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep 'Hash' 无（derive 集合不含 Hash）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -c 'impl AsRef<str> for' == 9 + grep -c 'impl .*Display for' == 9"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep MAX_DEPTH ≥ 1（walk 深度上限常量）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：grep -E 'fn coerce_str|fn coerce_string' → 无（method chain 替代；私有 helper 叫 as_token）"
+    source: 范围守护
+    status: done
+
+  - item: "范围守护：wc -l crates/roostery/src/remoterefs.rs < 500"
+    source: 范围守护
+    status: done
+
+  - item: "验收场景 S1.1-S1.13：13 个 happy path（每字段 + doc_token 3 alias + folder_token argv 消歧三态）全过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S2.1-S2.6：多字段混合 / 嵌套 / Array / 顶层 Array / sibling-key 字典序断言 / doc_token 多 alias 同现 6 case 全过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S3.1-S3.2：8 种错误兜底全返 default 永不 panic + 100 层深嵌套不栈溢出且抽到浅层抽不到深层 全过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S4.1：compile_fail,E0308 doctest 锁类型隔离（错误码精确）；S4.2：72 个 From 互转 impl 不存在（反向 grep）"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S5.1-S5.6：transparent 裸字符串 / 全 None {} / 部分填只含非空 / roundtrip / non_exhaustive compile_fail,E0063 / 9 newtype 的 AsRef + Display 表驱动 全过"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景 S6.1-S6.4：cargo test --all ≥ 10 新测 + cargo test --doc + clippy + fmt 四命令全绿"
+    source: 验收场景
+    status: done
+
+  - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
+    source: 验收场景
+    status: done
