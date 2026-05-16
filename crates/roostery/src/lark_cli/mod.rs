@@ -41,3 +41,70 @@ pub mod journaled;
 pub mod mock;
 pub mod runner;
 pub mod subprocess;
+
+pub use error::{LarkError, MAX_FIELD_LEN_IN_ERR};
+pub use runner::{LarkRunner, RunOptions};
+
+// --- Compile-time evidence (doctests) ---------------------------------------
+//
+// `LarkError` and `RunOptions` are `#[non_exhaustive]`. Outside the defining
+// crate (i.e. doctests' synthetic crates), exhaustive match without `_`
+// fails E0004 and struct literals without `..Default::default()` fail E0639.
+//
+// Type isolation is also enforced: the four variants and the inner data
+// shapes cannot be confused with each other at the type level.
+
+/// Doctest: `match` on `LarkError` without `_` is rejected outside the crate.
+///
+/// ```compile_fail,E0004
+/// use roostery::lark_cli::LarkError;
+/// fn label(e: &LarkError) -> &'static str {
+///     match e {
+///         LarkError::Spawn { .. } => "spawn",
+///         LarkError::NonZeroExit { .. } => "exit",
+///         LarkError::OutputParse { .. } => "parse",
+///         LarkError::Timeout { .. } => "timeout",
+///         // missing `_ =>`; #[non_exhaustive] requires it externally
+///     }
+/// }
+/// ```
+///
+/// With `_ =>` it compiles:
+///
+/// ```
+/// use roostery::lark_cli::LarkError;
+/// fn label(e: &LarkError) -> &'static str {
+///     match e {
+///         LarkError::Spawn { .. } => "spawn",
+///         LarkError::NonZeroExit { .. } => "exit",
+///         LarkError::OutputParse { .. } => "parse",
+///         LarkError::Timeout { .. } => "timeout",
+///         _ => "other",
+///     }
+/// }
+/// ```
+#[allow(dead_code)]
+fn _doctest_anchor_lark_error_non_exhaustive() {}
+
+/// Doctest: `RunOptions { ... }` struct literal is rejected outside the
+/// crate (E0639) — even `..Default::default()` does NOT bypass
+/// `#[non_exhaustive]`. External callers must use the builder API.
+///
+/// ```compile_fail,E0639
+/// use roostery::lark_cli::RunOptions;
+/// use std::time::Duration;
+/// let _ = RunOptions {
+///     timeout: Some(Duration::from_secs(1)),
+///     ..Default::default()
+/// };
+/// ```
+///
+/// Use the builder instead:
+///
+/// ```
+/// use roostery::lark_cli::RunOptions;
+/// use std::time::Duration;
+/// let _ = RunOptions::new().with_timeout(Duration::from_secs(1));
+/// ```
+#[allow(dead_code)]
+fn _doctest_anchor_run_options_non_exhaustive() {}
