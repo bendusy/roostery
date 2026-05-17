@@ -12,7 +12,7 @@
 
 ### 运行与本地起服务
 
-- `lark-cli` 版本 **pin 在 1.0.28**（特别是 `task append_task_steps` timestamp schema 兼容性）；升级前必须本地跑 smoke 验证矩阵，任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行
+- `lark-cli` 版本**最低 pin 在 1.0.28**（特别是 `task append_task_steps` timestamp schema 兼容性）；**1.0.29 已实测兼容**（feature `2026-05-17-roostery-smoke` 2026-05-17 跑通 6 条 probe）；升级前必须本地跑 `roostery smoke` 验证矩阵，任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行
 - `lark-cli` shim 安装到 `~/.local/bin/lark-cli`（PATH-prefix shim 透传 + 写 journal）；要求 `~/.local/bin` 在 PATH 前段才能拦截到真 `lark-cli`，`roostery init` 会校验
 
 ### 测试
