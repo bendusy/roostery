@@ -1,0 +1,164 @@
+feature: 2026-05-17-config-yaml
+created: 2026-05-17
+
+steps:
+  - action: "paths 扩 + Cargo.toml + lib.rs + config.rs 骨架：paths::config_path() 返 ~/.roostery/config.yaml；Cargo.toml 加 serde_yml = \"0.0.12\"；lib.rs pub mod config;；新建 src/config.rs 仅含占位 + 6 字段 Config struct 声明 + impl Default"
+    exit_signal: "cargo build 成功；paths::config_path 单测；既有 testsuite 无回归"
+    status: pending
+
+  - action: "schema 强类型化 + #[serde(default)] + ConfigError：完整 Config / Identity / Budgets / BudgetCfg / TraceConfig / JournalConfig 各 #[non_exhaustive] + impl Default（max_calls=100 / max_cost_usd=1.0 / max_depth=8 / rotation=\"daily\" / JournalConfig.dir 默认 paths::journal_dir() 调用时刻快照）；ConfigError 4 变体（LoadFailed / ParseFailed / SaveFailed / SchemaVersionMismatch）#[non_exhaustive]；SCHEMA_VERSION_CURRENT=1"
+    exit_signal: "Config::default() 单测；YAML \"\" → Config::default() 反序列化单测；完整 YAML round-trip 单测；schema 子 struct round-trip 单测"
+    status: pending
+
+  - action: "load / load_from + schema_version 校验：两个 load fn；缺失文件 → Ok(Config::default())；缺失 schema_version → 视为 1；schema_version != 1 → SchemaVersionMismatch；parse 失败 → ParseFailed；IO 失败 → LoadFailed"
+    exit_signal: "load 5 路径单测全过（missing file / valid / parse fail / IO error / schema mismatch）"
+    status: pending
+
+  - action: "save / save_to + atomic write：两个 save fn；ensure parent dir；serde_yml::to_string → 写 .tmp → std::fs::rename"
+    exit_signal: "save 4 单测全过（round-trip / default round-trip / parent dir 自动创建 / .tmp 不残留）"
+    status: pending
+
+  - action: "runners 开放结构 + 集成测试：BTreeMap<String, serde_yml::Value> 验证任意 runner 子键反序列化；写 ≥ 1 集成测试（tests/config_integration.rs 用完整 YAML 文件覆盖 save → load round-trip + ROOSTERY_HOME env override 联动 paths::config_path）"
+    exit_signal: "runners 多键混合 YAML 反序列化单测；集成测试通过；cargo test --all 全绿"
+    status: pending
+
+  - action: "完整验收 + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令全绿；推 CI 验三 job"
+    exit_signal: "本地四命令全绿；远端 CI 全绿"
+    status: pending
+
+checks:
+  - item: "src/config.rs 存在；档 1 单文件 < 500 行"
+    source: 名词契约
+    status: pending
+
+  - item: "Config #[non_exhaustive] 6 顶层字段（schema_version u32 / identity Identity / runners BTreeMap<String, serde_yml::Value> / budgets Budgets / trace TraceConfig / journal JournalConfig）全 #[serde(default)]"
+    source: 名词契约
+    status: pending
+
+  - item: "Identity #[non_exhaustive] 3 字段（user_id / default_chat_id / default_task_app_token 全 String 默认 \"\"）"
+    source: 名词契约
+    status: pending
+
+  - item: "Budgets #[non_exhaustive] { default: BudgetCfg }；BudgetCfg #[non_exhaustive] { max_calls=100, max_cost_usd=1.0 }"
+    source: 名词契约
+    status: pending
+
+  - item: "TraceConfig #[non_exhaustive] { max_depth: u32 = 8 }（roadmap §4.6 钉死 8）"
+    source: 名词契约
+    status: pending
+
+  - item: "JournalConfig #[non_exhaustive] { dir: PathBuf 默认 paths::journal_dir() 调用时刻快照, rotation: String = \"daily\" }"
+    source: 名词契约
+    status: pending
+
+  - item: "ConfigError #[non_exhaustive] thiserror 4 变体（LoadFailed { source: io::Error #[from] } / ParseFailed { source: serde_yml::Error } / SaveFailed { source: io::Error } / SchemaVersionMismatch { found, expected }）"
+    source: 名词契约
+    status: pending
+
+  - item: "公开 4 fn：load / load_from(&Path) / save(&Config) / save_to(&Config, &Path)；其他 fn 模块私有"
+    source: 名词契约
+    status: pending
+
+  - item: "SCHEMA_VERSION_CURRENT = 1 模块私有 const；与 lib.rs::SCHEMA_VERSION 独立"
+    source: 名词契约
+    status: pending
+
+  - item: "paths::config_path() 返 roostery_home().join(\"config.yaml\")；env ROOSTERY_HOME 间接生效"
+    source: 名词契约
+    status: pending
+
+  - item: "不变量 1：load 文件不存在不报错，返 Ok(Config::default())"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 2：atomic save —— .tmp 后缀写完 fs::rename 替换"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 3：schema_version 缺失隐式为 1（#[serde(default = \"default_schema_version\")] 返 1）"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 4：load 不调 env override；save 不调 redact"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 5：Config::default() 必须可 save + load round-trip 等价"
+    source: 流程级约束
+    status: pending
+
+  - item: "不变量 6：runners 子键名开放任意；本模块不校验 runner kind 合法性"
+    source: 流程级约束
+    status: pending
+
+  - item: "挂载点 1：crates/roostery/src/config.rs 存在"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 2：pub mod config; 出现在 lib.rs"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 3：paths::config_path() 返 ~/.roostery/config.yaml"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 4：Cargo.toml 含 serde_yml 依赖"
+    source: 挂载点
+    status: pending
+
+  - item: "挂载点 5：SCHEMA_VERSION_CURRENT = 1"
+    source: 挂载点
+    status: pending
+
+  - item: "范围守护：grep -E 'use tokio|tokio::|async fn' config.rs → 无"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep 'FEISHU_HUB_|FEISHU_NOTIFY_TO' config.rs → 无"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'notify_receive_id|daily_report|bitable' config.rs → 无（不沿用 Python schema）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'env::var|env_os' config.rs → 无（config 不读 env）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep 'LarkRunner|Journaled|smoke::' config.rs → 无"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：grep -E 'fn migrate|fn upgrade' config.rs → 无（不做 schema migration）"
+    source: 范围守护
+    status: pending
+
+  - item: "范围守护：wc -l config.rs < 500"
+    source: 范围守护
+    status: pending
+
+  - item: "验收场景 S1.1-S1.5：schema 反序列化 5 行为（空 YAML / 完整 YAML / 部分字段 / 未知字段 / runners 任意子键）全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S2.1-S2.4：schema_version 4 路径（缺失 / =1 / =2 mismatch / =0 mismatch）全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S3.1-S3.5：load 5 行为（missing file / valid / parse fail / IO error / ROOSTERY_HOME override 联动）全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S4.1-S4.5：save 5 行为（parent dir 自动创建 / round-trip / default round-trip / atomic .tmp / YAML 可读）全过"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景 S5.1-S5.4：cargo test --all + --doc + clippy + fmt 四命令全绿"
+    source: 验收场景
+    status: pending
+
+  - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
+    source: 验收场景
+    status: pending
