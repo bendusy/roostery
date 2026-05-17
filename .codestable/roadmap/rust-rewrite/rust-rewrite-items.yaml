@@ -61,10 +61,10 @@ items:
   - slug: config-yaml
     description: Config schema（§4.6）读写 + 默认值 + schema_version 升级路径
     depends_on: [rust-scaffold]
-    status: in-progress
+    status: done
     feature: 2026-05-17-config-yaml
     minimal_loop: false
-    notes: "Phase 3；schema 重新设计；Python 版 ~/.feishu_hub/config.yaml 迁移不在范围；YAML 库走 serde_yml 0.0.12（serde_yaml maintained fork）；runners 字段开放结构 BTreeMap<String, serde_yml::Value>，runner 强类型化推迟到 Phase 4 dispatcher-runners；env override 由各模块自管不在 config 层"
+    notes: "Phase 3；schema 重新设计；Python 版 ~/.feishu_hub/config.yaml 迁移不在范围；YAML 库走 serde_yml 0.0.12（serde_yaml maintained fork）；runners 字段开放结构 BTreeMap<String, serde_yml::Value>，runner 强类型化推迟到 Phase 4 dispatcher-runners；env override 由各模块自管不在 config 层；4 公开 fn load/load_from/save/save_to + atomic .tmp+rename；schema_version 缺失=1 / =1 OK / !=1 SchemaVersionMismatch"
 
   - slug: hooks-merge
     description: JSON 深合并，CC / Codex Stop hook 注入 ~/.claude/settings.json / ~/.codex/hooks.json

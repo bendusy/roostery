@@ -413,9 +413,9 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 8. **`config-yaml`** — Config schema（§4.6）读写 + 默认值 + 升级路径
    - 所属模块：D
    - 依赖：`rust-scaffold`
-   - 状态：planned
+   - 状态：**done**（feature `2026-05-17-config-yaml`）
    - 主要支持的 req：`agent-work-in-feishu`（用户身份 / 默认群配置）
-   - 备注：Phase 3；schema 重新设计；落 `~/.roostery/config.yaml`；用户已有 `~/.feishu_hub/config.yaml`（Python 版）的迁移不在本 feature 范围（Python 不维护）
+   - 备注：Phase 3；schema 1:1 落 roadmap §4.6（6 顶层节，全 `#[serde(default)]`）；YAML 库 `serde_yml = "0.0.12"`（`serde_yaml` maintained fork）；`runners` 走开放 `BTreeMap<String, serde_yml::Value>`，runner 强类型化推到 Phase 4 dispatcher-runners；config 不读 env override，各模块自管；4 公开 fn `load` / `load_from` / `save` / `save_to`，atomic `.tmp` + rename；`SchemaVersionMismatch` 错误变体留 v2 升级钩子；纯 lib 扩展，main.rs 无变更
 
 9. **`hooks-merge`** — JSON 深合并，CC / Codex Stop hook 注入 `~/.claude/settings.json` / `~/.codex/hooks.json`
    - 所属模块：D

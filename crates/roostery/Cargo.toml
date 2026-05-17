@@ -31,6 +31,7 @@ async-trait = "0.1"
 thiserror = "1"
 tracing = "0.1"
 clap = { version = "4", features = ["derive"] }
+serde_yml = "0.0.12"
 
 [dev-dependencies]
 tempfile = "3"

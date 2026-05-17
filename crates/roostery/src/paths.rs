@@ -33,6 +33,10 @@ pub fn smoke_state_path() -> PathBuf {
     state_dir().join("smoke.json")
 }
 
+pub fn config_path() -> PathBuf {
+    roostery_home().join("config.yaml")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -60,6 +64,10 @@ mod tests {
         assert_eq!(
             smoke_state_path(),
             PathBuf::from("/tmp/roostery-test-override/state/smoke.json")
+        );
+        assert_eq!(
+            config_path(),
+            PathBuf::from("/tmp/roostery-test-override/config.yaml")
         );
         unsafe { std::env::remove_var(ENV_HOME) };
     }

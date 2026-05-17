@@ -43,6 +43,8 @@
 | `ROOSTERY_NOJOURNAL` | shim 读取的 env，设为 `"1"` 时跳过写完整 journal entry（仍跑 real lark-cli 并 tee 给用户，只追加一条 `action="lark-cli:{verb}:skipped"` + `params.reason="nojournal"` 的标记 entry）。**不再读** Python 期 `FEISHU_HUB_NOJOURNAL` |
 | `Smoke` 模块 | Phase 2 落地的 `crates/roostery/src/smoke.rs`（feature `2026-05-17-roostery-smoke`）。`PROBE_MATRIX` 6 条 `lark-cli {sub} ... --dry-run` 命令（im / docs / drive）顺序跑，分类 `Dry Run` marker + rc==0 = ok；写状态快照 `~/.roostery/state/smoke.json`（`SmokeReport` `schema_version=1` + `lark_cli_version` 字段助升级漂移诊断 + atomic `.tmp` + rename）。公开 `pub fn run() -> SmokeReport` + `pub fn ensure_ready() -> Result<(), SmokeError>` 两条 API。`SmokeError` `#[non_exhaustive]` 4 变体（NeverRun / LastFailed / StateLoadFailed / BinaryNotFound）。**不调 LarkRunner trait**——raw bytes 模型（检 stdout 文本 marker）vs buffered Value 模型语义不同（同 shim 决定） |
 | `roostery smoke` 子命令 | clap derive 主 bin 的第一个真正子命令（feature `2026-05-17-roostery-smoke` 引入 clap 4 derive 作为项目首个 CLI 解析器，后续 init / dispatch 复用）。退 0 = `all_ok` / 退 1 = 至少一条 probe 失败；`--version` 锁定 `roostery 0.0.0 (rust)`（`#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (rust)"))]`）|
+| `Config` | Phase 3 落地的 `crates/roostery/src/config.rs`（feature `2026-05-17-config-yaml`）。顶层 6 字段 `#[non_exhaustive]`：`schema_version: u32` (1) / `identity: Identity { user_id, default_chat_id, default_task_app_token }` / `runners: BTreeMap<String, serde_yml::Value>`（开放结构——加新 runner kind 不动 schema 顶层）/ `budgets: Budgets { default: BudgetCfg { max_calls=100, max_cost_usd=1.0 } }` / `trace: TraceConfig { max_depth=8 }` / `journal: JournalConfig { dir, rotation="daily" }`。所有字段 `#[serde(default)]`——任意子集 YAML 都能反序列化（roadmap §4.6 "顶层字段缺失用编译期默认值" 兑现）。`ConfigError` `#[non_exhaustive]` 4 变体（LoadFailed / ParseFailed / SaveFailed / SchemaVersionMismatch）。4 公开 fn：`load` / `load_from(&Path)` / `save(&cfg)` / `save_to(&cfg, &Path)`（atomic `.tmp` + rename）。**不读 env override**（各模块自管，与 `lark_cli/subprocess.rs::ENV_BIN` 等不耦合）；**不实现 schema migration**（v2 落地时由 cs-roadmap update 评估）|
+| YAML lib | `serde_yml = "0.0.12"`——`serde_yaml` 2024 起 unmaintained，`serde_yml` 是主流 maintained fork（drop-in replacement）。仅 `config` 模块直接 import；其他模块不引 YAML 依赖 |
 
 ### State ownership
 
@@ -141,7 +143,21 @@
 
 ### Module D · 本地配置与安装（Phase 3）
 bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`）、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入模板。
-- 子 feature：`config-yaml` / `hooks-merge` / `roostery-init`
+
+**config 模块**（已落地，feature `2026-05-17-config-yaml`，Phase 3）：
+
+- 新文件 `crates/roostery/src/config.rs`（档 1 单文件，产品 ~200 行 + 内联测试 ~218 行）；同 crate 复用 `paths` 模块（新增 `config_path`）
+- 引入 `serde_yml = "0.0.12"` YAML 库（`serde_yaml` maintained fork，2024 起原作者弃坑）；**仅 config 模块直接 import**
+- 顶层 schema：`Config` `#[non_exhaustive]` 6 字段（`schema_version` / `identity` / `runners` / `budgets` / `trace` / `journal`），全 `#[serde(default)]` per-field 满足 roadmap §4.6 "顶层字段缺失用编译期默认值"
+- `runners: BTreeMap<String, serde_yml::Value>` 开放结构——Phase 4 dispatcher-runners 落地时各 Runner impl 自己 deserialize 子节，新加 runner kind 不动顶层 schema
+- 公开 4 fn：`load()` / `load_from(&Path)` / `save(&cfg)` / `save_to(&cfg, &Path)`；缺失文件 → `Ok(Config::default())`（first-run 装机友好）；atomic write `.tmp` + `fs::rename`
+- `ConfigError` `#[non_exhaustive]` 4 变体（LoadFailed / ParseFailed / SaveFailed / SchemaVersionMismatch）
+- schema_version 处理：缺失字段隐式 = 1（`#[serde(default = "default_schema_version")]`）；==1 OK；!=1 报 `SchemaVersionMismatch { found, expected }` 让 caller 决定 migration
+- `SCHEMA_VERSION_CURRENT: u32 = 1` 模块私有 const，与 `lib.rs::SCHEMA_VERSION`（管 JournalEntry schema）独立 bump
+- 设计约束：**不读 env override**（各模块自管，如 `lark_cli/subprocess.rs::ENV_BIN`、`smoke::ENV_BIN` 自管 `ROOSTERY_LARK_CLI_BIN`；config 仅管文件层）；**不实现 schema migration**（v2 落地时走 cs-roadmap update）；**不消费 runners 子结构**（占位给 Phase 4）；**不修改 main.rs**（纯 lib 扩展，无 CLI 子命令变更）
+- 不变量：`load` 文件不存在 → default；atomic save；schema_version 缺失隐式=1；config 不调 redact（不含敏感数据）；`Config::default()` 可 save+load round-trip 等价
+
+- 子 feature：**`config-yaml`（done）** / `hooks-merge` / `roostery-init`
 
 ### Module E · Dispatcher（Phase 4）
 本地执行桥。event → 规则匹配 → trace/budget gate → runner → emit。`runtime-neutral` req 的执行机制（通过 `Runner` trait 调度，不感知具体 runtime）。
@@ -173,7 +189,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 | 4.3 | `Runner` trait | E → 具体 runner | Phase 4 |
 | 4.4 | `HookEvent` schema | D/E → E | Phase 3-4 |
 | 4.5 | `TraceContext` | E → F → C | Phase 4 |
-| 4.6 | Config schema | D 写 → 所有读 | Phase 3 |
+| 4.6 | Config schema | D 写 → 所有读 | Phase 3 — **已落地**（feature `2026-05-17-config-yaml`） |
 | 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 |
 
 ## 5. 关键架构决定
