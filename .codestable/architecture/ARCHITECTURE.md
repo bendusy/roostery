@@ -38,6 +38,9 @@
 | `SENSITIVE_KEYS` | redact 模块默认敏感字段名列表（11 个：7 个 Python parity + 4 个业界扩展 `password` / `secret` / `cookie` / `private_key`），归一化后比较 |
 | Logging-boundary scrubber | redact 模块的定位：对**已 flow 到 logging 边界的数据**做脱敏。与 `redact::Secret<T>` / `secrecy::SecretString` 等 in-memory wrapper crate 不同层——本项目本 phase 不引入这类 wrapper |
 | Newtype token | remoterefs 模块的 9 个独立类型（`MessageId` / `DocToken` / `FolderToken` / `RecordId` / `ChatId` / `AppToken` / `WikiToken` / `TaskId` / `ThreadId`），全部 `#[serde(transparent)]`——JSON 形态裸字符串与 Python 版兼容，Rust 类型互不兼容，下游 cross-wiring bug 编译期拦截。`RemoteRefs` 容器 `#[non_exhaustive]` 防外部 struct literal 构造 |
+| `shim` 二进制 | Phase 2 落地的 `bin/shim`（`src/bin/shim.rs`，feature `2026-05-17-lark-cli-shim`）。装到 `~/.local/bin/lark-cli` 作为 PATH-prefix 拦截点；agent runtime 调 `lark-cli` 时被透明截获，shim 流式 tee stdout/stderr 给用户 + 写一条 source="shim" 的 `JournalEntry`，最后 `exec()` / 等待 real lark-cli。与 `Journaled<LarkCli>` 装饰器是两条独立 I/O 路径：shim 是 **streaming bytes**（std::thread + std::process + tee），`Journaled<LarkCli>` 是 **buffered Value**（tokio + serde_json::Value）；语义不同所以不强行抽公共 trait |
+| `ROOSTERY_REAL_LARK_CLI` | shim 读取的 env，指向 real lark-cli 二进制路径；不设 shim 退 127。由 Phase 3 `roostery init` 装机时写入。**不再读** Python 期 `FEISHU_HUB_REAL_LARK_CLI` |
+| `ROOSTERY_NOJOURNAL` | shim 读取的 env，设为 `"1"` 时跳过写完整 journal entry（仍跑 real lark-cli 并 tee 给用户，只追加一条 `action="lark-cli:{verb}:skipped"` + `params.reason="nojournal"` 的标记 entry）。**不再读** Python 期 `FEISHU_HUB_NOJOURNAL` |
 
 ### State ownership
 
@@ -111,7 +114,17 @@
 - **下游约定**：模块 D/E/F/G/H 依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接 `Command::new("lark-cli")`（双向引用 §6 第 1 条架构红线）
 - **不在范围**（Phase 2）：业务包裹函数（`im_send_text` 等归 Phase 5+）；retry（归 Phase 4 dispatcher）；jq 选择器；Config 驱动构造
 
-- 子 feature：**`lark-cli-wrapper`（done）** / `roostery-smoke` / `lark-cli-shim`
+**shim 二进制**（已落地，feature `2026-05-17-lark-cli-shim`，Phase 2）：
+
+- 新增 bin target：`Cargo.toml [[bin]] name = "shim" path = "src/bin/shim.rs"`；同 crate 复用 `journal` / `redact` / `remoterefs` 模块
+- 装机点：`~/.local/bin/lark-cli`（PATH-prefix shim 拦截 agent runtime 直接调 `lark-cli` 的所有调用；装机由 Phase 3 `roostery init` 完成）
+- 核心行为：`resolve_real_cli`（env `ROOSTERY_REAL_LARK_CLI` + canonicalize anti-recursion）→ `is_interactive` 三段式（TTY / verb `["auth"]` / flag `--interactive`/`-i`/`--repl`） → 命中走 `std::os::unix::process::CommandExt::exec()` 直通；未命中走 `run_non_interactive`（`std::process::Command` + 2 个 `std::thread::spawn` pump 流式 tee + head buffer 64 KiB stdout / 16 KiB stderr） → `build_entry` 11 字段映射（source="shim" / action="lark-cli:{verb}" / params 含 argv+cwd+stdin_present+stdout_head+stderr_head+remote_refs / result Ok refs \| Err NonZeroExit / duration_ms） → `journal.append`
+- 与 `Journaled<LarkCli>` 装饰器的区别：两者都写 journal，但 I/O 模型不同——shim 是 streaming bytes（透明 tee 4 KiB chunks），`Journaled<LarkCli>` 是 buffered Value（一次性 `wait_with_output` + JSON parse）；caller 路径也不同——shim 截获 agent runtime 直接调用，`Journaled<LarkCli>` 由 dispatcher 内部调度。两条路径独立写 journal，下游 read/replay 通过 `source` 字段区分（"shim" vs "dispatcher"）
+- 设计约束：不引 tokio（启动开销 / 二进制大小敏感）；不调 LarkRunner trait（I/O 语义不同）；不读 Config（Phase 3 起来后由 init 写 env 注入）；不实现 retry / 不 parse stdout JSON / 不修改 lark_cli wrapper 模块
+- 不变量：透明性（用户 stdout/stderr 字节 = real lark-cli 输出）；exit code 透传（setup 失败固定 127）；anti-recursion 强制；journal 写失败 `tracing::warn!` 不影响 exit code；pump 写用户 stream 失败 silent（broken pipe tolerant）；head buffer 超 cap 后继续 tee 但停扩
+- NOJOURNAL=1 路径：仍跑 real lark-cli + tee，但写一条 `action="lark-cli:{verb}:skipped"` + `params.reason="nojournal"` 的标记 entry（"知道发生了但故意没记完整"）
+
+- 子 feature：**`lark-cli-wrapper`（done）** / `roostery-smoke` / **`lark-cli-shim`（done）**
 
 ### Module D · 本地配置与安装（Phase 3）
 bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`）、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入模板。
@@ -158,12 +171,13 @@ Feishu Base 作为索引层（**非** source of truth）。
 4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge` + 模板嵌入扩展，loop 不感知 provider
 5. **`llm_summary` 模块是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral
 6. **业务标识符 newtype 隔离**（自 core-remoterefs 起）：对**从飞书侧拿到的、有明确业务语义角色的标识符**（token / id / cursor）一律用 newtype + `#[serde(transparent)]` 隔离类型；不实现互转 `From` impl。Phase 4 dispatcher 的 `TraceId` / `EventId` / `ParentEventId` 是合格候选；**不**适用于"还没成为业务 token 的字符串"（subcommand 名 / 原始 argv / 普通 String 参数）——后者 newtype 化是 noise。详见 `.codestable/compound/` 待归档 convention
+7. **shim 与 LarkRunner 走两条独立 I/O 路径**（自 lark-cli-shim 起）：shim 走 **streaming bytes 模型 + std::thread + std::process**（透明 tee 4 KiB chunks 给用户，head buffer 副本写 journal）；`LarkRunner` 走 **buffered Value 模型 + tokio**（`wait_with_output` 一次性 collect + `serde_json::Value` parse）。两者都写 journal，但 I/O 语义根本不同（streaming vs buffered；用户 stdout 是 first-class vs 仅返 Value 给 caller），所以**不强行抽公共 trait**；只共享下层 `journal` / `redact` / `remoterefs` 模块。下游 read/replay 通过 `JournalEntry.source` 字段（"shim" vs "dispatcher" 等）区分两条路径产生的 entry
 
 ## 6. 已知约束 / 硬边界
 
 > 完整 9 条硬约束见 `.codestable/attention.md`——每次 CodeStable 子技能启动自动加载。
 
-1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK。**兑现层**：`crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）暴露 `LarkRunner` trait + 三个实现；新模块依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接拼 `Command::new("lark-cli")`（双向引用 `lark_cli/mod.rs` 顶部 docstring）
+1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK。**兑现层**：`crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）暴露 `LarkRunner` trait + 三个实现；新模块依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接拼 `Command::new("lark-cli")`（双向引用 `lark_cli/mod.rs` 顶部 docstring）。**装机端兑现链**：feature `2026-05-17-lark-cli-shim` 把 `bin/shim` 装到 `~/.local/bin/lark-cli`（PATH 前段拦截），agent runtime 直接调 `lark-cli` 也被透明截获写 journal 后透传到 real lark-cli——这是同一红线的"客户端绕过路径"封堵，与 wrapper 是同一硬约束的两个兑现层（`crates/roostery/src/bin/shim.rs` 顶部 docstring 反向引用本节）
 2. **本地 state 是 cache 不是真相**。`~/.roostery/`（Rust 期；Python 期 `~/.feishu_hub/`）下任何东西都只是可重放的审计，不回答"任务 X 现在状态如何"
 3. **`llm_summary` 是外部 LLM client import 的唯一允许位置**
 4. **lark-cli 版本 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke

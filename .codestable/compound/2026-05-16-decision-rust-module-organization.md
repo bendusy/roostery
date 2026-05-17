@@ -4,7 +4,8 @@ category: convention
 slug: rust-module-organization
 status: active
 created: 2026-05-16
-tags: [rust, module-layout, codebase-structure]
+updated: 2026-05-17
+tags: [rust, module-layout, codebase-structure, cargo-bin-target]
 ---
 
 # Rust 模块组织约定
@@ -39,7 +40,25 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 
 适用：模块需独立发版 / 有独立 feature flag / 跨二进制复用 / 编译期严重拖慢主 crate。
 
-例（计划中）：`bin/shim` 独立二进制；如 `journal` 未来要给外部社区做 jsonl reader 库可能独立成 `crates/roostery-journal/`。
+例（计划中）：如 `journal` 未来要给外部社区做 jsonl reader 库可能独立成 `crates/roostery-journal/`。
+
+### 档 4：Cargo bin target（自 lark-cli-shim 起补档）
+
+主 crate 内的辅助二进制（shim / 安装钩子 / 工具脚本等不是 user-facing 主程序的 bin），落 `crates/roostery/src/bin/{name}.rs`——Cargo 自动发现机制 + `Cargo.toml` 显式 `[[bin]] name = "{name}" path = "src/bin/{name}.rs"` 段稳定名字。同 crate 自动复用 lib 模块（`use roostery::journal::...`）零成本。
+
+适用：
+
+- 辅助二进制（非 user-facing 主程序）
+- 单文件 < 500 行（含 inline tests）
+- 同 crate lib 模块复用成本低于独立 crate 的隔离收益
+
+例：`crates/roostery/src/bin/shim.rs`（feature `2026-05-17-lark-cli-shim`，PATH-prefix 透传 + journal 写入，单文件 ~310 产品代码 + ~210 内联测试）。
+
+**与档 1-3 的关系**：
+
+- 主程序 bin（user-facing CLI，本项目的 `roostery`）：用 Cargo 默认的 `src/main.rs`，**不**进 `src/bin/`
+- 一个档 4 的 bin 预估超 500 行或内部模块化需求显著 → 升级到 `src/bin/{name}/main.rs` + 子模块（仍同 crate；Cargo 自动识别）
+- 当 bin 不需要 lib 的 transitive deps（如 shim 不用 tokio 但同 crate 已传递引入 tokio）且**二进制 size 敏感**——若 release LTO 后实测 > 5 MB → 升档 3 独立 workspace crate
 
 ### 命名
 
@@ -50,6 +69,8 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 ### 升档触发与执行
 
 - 单文件即将 > 500 行 → 该文件所属的下一个 feature 在 design §2.5 评估是否升档 2，按"只搬不改行为"标准独立成 step 跑
+- 档 4 bin 单文件即将 > 500 行 → 升级到 `src/bin/{name}/main.rs` + 子模块（同 crate）
+- 档 4 bin release LTO 后二进制 > 5 MB（size-sensitive 场景如 shim 每次 lark-cli 调用都启动） → 评估升 档 3 独立 crate
 - 不在功能 feature 里偷偷重组——结构变更必须独立 commit，编译器全程绿灯
 
 ## 为什么这样选
@@ -68,6 +89,9 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 | **按 phase 分子目录**（`src/phase1/redact.rs` / `src/phase2/lark_cli.rs`）| phase 是 roadmap 概念不是稳定结构；roadmap 调整时整批文件要搬，且模块功能本身跟 phase 无关 |
 | **按 roadmap module 分子目录**（`src/module_a/redact.rs`）| roadmap §3 的 Module A-H 是规划聚合，不是 Rust 模块边界——同 Module 的 feature 之间未必有共享代码或互相 import 关系（如 redact / journal / remoterefs 都在 Module A 但互相独立） |
 | **不归档，用 review 兜底**| AI 没有决策上下文给出"合理但与项目规约冲突"的方案；review 是兜底不是预防 |
+| **档 4 辅助 bin 直接独立 crate**（2026-05-17 评估）| 增加 workspace member 配置成本 + 失去同 crate lib 模块零成本复用；只在 size-sensitive 且实测超阈值时才值得，作为档 4 升档触发而非默认选择 |
+| **档 4 不用 `src/bin/` 而用 subcommand 嵌进 `src/main.rs`**（2026-05-17 评估）| user-facing CLI 和辅助工具混在同一二进制；shim 装机点是 `~/.local/bin/lark-cli`（独立路径），与 `roostery init` 等 user-facing 命令本质不同——subcommand 形式无法满足 PATH-prefix 透传场景 |
+| **档 4 不显式声明 `[[bin]]` 段，只靠 Cargo 文件名自动发现**（2026-05-17 评估）| Cargo 确实能自动发现 `src/bin/*.rs`，但显式段把"二进制名"钉成稳定契约（agent runtime 装机脚本依赖名字稳定），避免未来重命名 `src/bin/shim.rs` 时静默改变 bin 名 |
 
 ## 影响 / 后续约束
 
@@ -75,10 +99,14 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 - **新模块加入触发**：任何子 feature 引入 `crates/roostery/src/` 新文件时，要在 design §2.5 显式声明走档 1（默认）/ 档 2 / 档 3 哪一档
 - **升档动作必须独立 commit**：从档 1 升到档 2 的重组（拆文件 / 移动 mod 声明）按 cs-feat-design §2.5 "只搬不改行为"标准做，独立 step + 独立 commit，不混在功能 feature 里
 - **不溯及既往**：现有 5 个文件全在档 1 区间，不强制重组；下次新增 / 现有文件升档时按本规约
-- **审视周期**：Phase 2（lark-cli-wrapper / smoke / shim）落地后回看一次——届时 src/ 会有 ~8 文件，验证档位阈值是否仍合理；不合理走本 decision 的 `update` 流程（不 supersede，结论本身没变）
+- **新加 bin target 触发**：任何子 feature 引入 `crates/roostery/src/bin/` 新文件时，design §2.5 显式声明走档 4（默认）/ 升档 3（size-sensitive 实测验证后）；不允许"先放 src/bin/ 以后看情况"含糊
+- **审视周期**：
+  - Phase 2（lark-cli-wrapper / smoke / shim）落地后回看一次——届时 src/ 会有 ~8 文件，验证档位阈值是否仍合理；不合理走本 decision 的 `update` 流程（不 supersede，结论本身没变）
+  - **2026-05-17 update**：Phase 2 收尾审视——三档（档 1/2/3）阈值经 redact / journal / lark_cli 验证合理；新增第 4 档（Cargo bin target）覆盖 shim 路径。下次审视点 Phase 5（bot bridge feature 落地后，预计触发新的辅助 bin 如 stop-hook 脚本嵌入）
 
 ## 相关文档
 
 - `.codestable/features/2026-05-15-core-redact/core-redact-design.md` §2.5：首次 flag 本约定的需要
 - `.codestable/features/2026-05-15-journal-core/journal-core-design.md` §2.5：第二次 flag，触发本归档
+- `.codestable/features/2026-05-17-lark-cli-shim/lark-cli-shim-design.md` §2.5：识别出档 4 Cargo bin target，跑通后由 acceptance 阶段触发本 decision update（2026-05-17）
 - `.codestable/architecture/ARCHITECTURE.md` §3 Module A-H：roadmap-level module 划分（注意：与本 Rust 文件 / 目录约定是**不同维度**——roadmap module 是规划聚合，本约定是 Rust 物理结构）

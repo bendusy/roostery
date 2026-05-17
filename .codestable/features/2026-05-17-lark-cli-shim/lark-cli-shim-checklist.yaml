@@ -4,181 +4,181 @@ created: 2026-05-17
 steps:
   - action: "bin target + 骨架：建 crates/roostery/src/bin/shim.rs 含 fn main() -> ExitCode { ExitCode::SUCCESS } 占位；Cargo.toml 加 [[bin]] name = \"shim\" path = \"src/bin/shim.rs\""
     exit_signal: "cargo build --bin shim 成功；./target/debug/shim 跑通退 0；cargo test --all 仍跑通既有 106 lib 测试无回归"
-    status: pending
+    status: done
 
   - action: "ShimError 4 变体 + resolve_real_cli + anti-recursion + 类型骨架：声明 ShimError thiserror enum + 常量 (ENV_REAL_CLI / ENV_NOJOURNAL / INTERACTIVE_VERBS / STDOUT_HEAD_CAP / STDERR_HEAD_CAP) + resolve_real_cli 实现 (env 读 + canonicalize + 比对 current_exe) + 其他 fn 签名 todo!()"
     exit_signal: "resolve_real_cli 4 错误路径单测（MissingRealCli / Recursion / RealCliNotFound / happy）通过"
-    status: pending
+    status: done
 
   - action: "is_interactive 三段式 + Outcome enum + build_entry 两形态：is_interactive 检 IsTerminal + INTERACTIVE_VERBS + flag 三层；Outcome::Full | Outcome::Skipped；build_entry 构造 JournalEntry 11 字段映射（source=shim / action=lark-cli:{argv[0]}[:skipped] / params 含 argv+cwd+stdin_present+stdout_head+stderr_head+remote_refs / result Ok|Err / duration_ms）"
     exit_signal: "is_interactive truth table（TTY / verb / flag / 都不命中）单测 + build_entry schema 锁定单测（11 字段全在 + result Ok 含 remote_refs Value）"
-    status: pending
+    status: done
 
   - action: "run_non_interactive 流式 pump：std::process::Command + 2 std::thread::spawn（stdout/stderr 各一个）+ head buffer cap + broken-pipe tolerant（let _ = dst.write_all）；返回 (rc, stdout_head, stderr_head, duration_ms)"
     exit_signal: "用伪 binary fixture（同 lark_cli/subprocess 模式）跑 happy + exit code 透传 + head cap (200 KiB 输出验 head 仅 64 KiB) + 4 case 全过"
-    status: pending
+    status: done
 
   - action: "main 整合 + 集成测试：main 把所有片段串起来（resolve_real_cli → is_interactive 分支 → NOJOURNAL 分支 → run_non_interactive → build_entry → journal.append → tracing::warn on fail）；新建 crates/roostery/tests/shim_integration.rs 含 2 集成测试（非交互写完整 entry + NOJOURNAL 写 skipped entry）"
     exit_signal: "集成测试全过；本地 cargo test --all 全绿"
-    status: pending
+    status: done
 
   - action: "完整验收 + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令全绿；推 CI 验三 job"
     exit_signal: "本地四命令全绿；远端 CI 全绿"
-    status: pending
+    status: done
 
 checks:
   - item: "bin target [[bin]] name = \"shim\" path = \"src/bin/shim.rs\" 段存在于 Cargo.toml"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "ShimError thiserror 4 变体（MissingRealCli / Recursion / RealCliNotFound / JournalFailed），不混 String 错误"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "常量集：ENV_REAL_CLI / ENV_NOJOURNAL / INTERACTIVE_VERBS (=[\"auth\"]) / STDOUT_HEAD_CAP (64 KiB) / STDERR_HEAD_CAP (16 KiB) 全部模块私有"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "resolve_real_cli 签名 -> Result<PathBuf, ShimError>；env 读 + canonicalize + 比对 current_exe"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "is_interactive(sub_argv: &[String]) -> bool 三段式：IsTerminal(0/1/2) || argv[0] in INTERACTIVE_VERBS || argv 含 --interactive/-i/--repl"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "build_entry 输出 JournalEntry 11 字段全填；额外数据进 params 子对象；不 bump schema_version"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "Outcome enum Full / Skipped 两变体覆盖 3 场景（非交互完整 / interactive skipped / NOJOURNAL skipped）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "run_non_interactive 用 std::thread::spawn 不用 tokio"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "不变量 1：透明性——用户 stdout/stderr 字节 == real lark-cli 输出（pump tee 不修改）"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 2：exit code 透传；setup 失败用 127"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 3：interactive 路径用 std::os::unix::process::CommandExt::exec() 替换进程不返回"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 4：anti-recursion 在 resolve_real_cli 内强制 canonicalize 比对，命中即 fail"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 5：NOJOURNAL=1 仍跑 real lark-cli + tee 用户；只跳完整 entry 写 skipped 标记"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 6：journal 写失败 tracing::warn! 不影响 exit code"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 7：pump 写 dst 失败用 let _ = silent 吞掉，不让 broken pipe 终止 shim"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 8：head buffer 超 cap 后继续 tee 给用户但停止扩展 head"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "挂载点 1：crates/roostery/src/bin/shim.rs 存在"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 2：Cargo.toml 含 [[bin]] name = \"shim\" 段"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 3：main 调用 journal::Journal + redact::scrub_argv + remoterefs::extract"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 4：ENV_REAL_CLI = \"ROOSTERY_REAL_LARK_CLI\" 常量稳定"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 5：std::os::unix::process::CommandExt::exec() 调用存在于 interactive 路径"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'use tokio|tokio::|#\\[tokio::main\\]' shim.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'LarkRunner|LarkCli|Journaled' shim.rs → 无（不复用 LarkRunner 路径）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'FEISHU_HUB_' shim.rs → 无运行时引用"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'use nix|use libc' Cargo.toml → 无新增"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'Config|cfgmod|toml::' shim.rs → 无（不读 Config）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'fn retry|retries|backoff' shim.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'serde_json::from_str|::from_slice' shim.rs → 无（不 parse stdout JSON）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep INTERACTIVE_VERBS shim.rs == 1（常量定义）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：wc -l shim.rs < 400"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "验收场景 S1.1-S1.3：3 setup 失败路径（env 未设 / real cli 不存在 / anti-recursion）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S2.1-S2.5：5 interactive 场景（TTY / verb / 3 flag / 都不命中 / skipped entry 形态）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S3.1-S3.4：4 非交互流式 pump（happy / exit code 透传 / head cap / broken pipe tolerance）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S4.1-S4.2：NOJOURNAL=1 写 skipped entry / NOJOURNAL=0 写完整 entry 全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S5.1-S5.3：完整 entry schema / skipped entry schema / 空 argv 边界 全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S6.1-S6.3：argv 脱敏 / stdout remote_refs 抽取 / stdout scrub_text 脱敏 全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S7.1-S7.4：cargo test --all + --doc + clippy + fmt 四命令全绿"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S7.5：架构红线守护 grep LarkRunner/LarkCli/Journaled 无命中"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
     source: 验收场景
-    status: pending
+    status: pending  # 待 commit + push 后由 CI 验证

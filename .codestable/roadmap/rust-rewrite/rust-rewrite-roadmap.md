@@ -404,9 +404,9 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 7. **`lark-cli-shim`** — `bin/shim` 独立二进制，PATH-prefix shim 透传真 `lark-cli` 并写 journal
    - 所属模块：C
    - 依赖：`lark-cli-wrapper`、`journal-core`
-   - 状态：planned
+   - 状态：**done**（feature `2026-05-17-lark-cli-shim`）
    - 主要支持的 req：`portable-by-default`（所有飞书操作必经 journal）
-   - 备注：Phase 2；shim 是 `~/.local/bin/lark-cli` 装机点；要保证 agent runtime 调 lark-cli 时被 shim 透明拦截
+   - 备注：Phase 2；shim 是 `~/.local/bin/lark-cli` 装机点；agent runtime 调 lark-cli 时被 shim 透明拦截；streaming bytes 模型（std::thread + std::process + 2 pump thread + head buffer 64 KiB/16 KiB），不引 tokio 不调 LarkRunner trait（I/O 语义不同）；interactive 三段式（TTY/verb `["auth"]`/flag）走 `CommandExt::exec()` 直通；anti-recursion 用 canonicalize；`ROOSTERY_REAL_LARK_CLI` env 必填，`ROOSTERY_NOJOURNAL=1` 写 skipped 标记 entry
 
 ### Module D · 本地配置与安装
 

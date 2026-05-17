@@ -3,8 +3,8 @@ doc_type: requirement
 slug: portable-by-default
 pitch: 你的 agent 工作痕迹在本地——飞书出问题 / 想换平台 / 自建前端都能继续用。Roostery 是中立中间件，不是飞书附属。
 status: draft
-last_reviewed: 2026-05-16
-implemented_by: [2026-05-15-core-redact, 2026-05-15-journal-core, 2026-05-16-core-remoterefs]
+last_reviewed: 2026-05-17
+implemented_by: [2026-05-15-core-redact, 2026-05-15-journal-core, 2026-05-16-core-remoterefs, 2026-05-17-lark-cli-shim]
 tags: [portability, vendor-neutral, local-first, escape-hatch]
 ---
 
@@ -57,6 +57,8 @@ journal 的 schema 公开、稳定（每行带 version 标记）。这意味着�
 - **replay 不替代真测**——replay 只重现 Roostery 自己这一侧，不重现飞书云端真实状态、不重现 agent runtime 的副作用
 
 ## 变更日志
+
+- **2026-05-17** · `lark-cli-shim` 落地（feature `2026-05-17-lark-cli-shim`）：装机端兑现——`bin/shim` 装到 `~/.local/bin/lark-cli` 作 PATH-prefix 拦截，agent runtime 直接调 `lark-cli` 时被透明截获并写一条 `source="shim"` 的 `JournalEntry`，最后 `exec()` / 等待 real lark-cli。streaming bytes 模型（不引 tokio / 不调 LarkRunner trait，I/O 语义独立）。`ROOSTERY_NOJOURNAL=1` 仍跑 real lark-cli + tee，只写一条 skipped 标记 entry。本条兑现"agent 调飞书的所有调用必经本地 journal"的客户端封堵层；req 仍保持 `draft`——read/replay 工具未落地，可移植性数据形态已就绪但消费侧尚未出现可用工具
 
 - **2026-05-16** · `journal-core` 落地（commit `b9ac5be`）：`JournalEntry` schema_version=1 对外公开承诺正式生效，jsonl 写入侧基础设施 + ULID `event_id` + UTC 日切 rotation + redact 集成完成。**写入侧 req 已兑现**；read/replay API + 跨设备 / 自建 view 的具体落地仍待后续 phase——req 保持 `draft` 直至这些场景出现具体可消费的工具
 - **2026-05-15** · `core-redact` 落地（commit `1e392e5`）：`scrub_value` / `scrub_argv` / `scrub_text` + `MASK` + 11 个 `SENSITIVE_KEYS`。兑现"基础脱敏"边界；为 journal 写入提供 logging-boundary 脱敏前置

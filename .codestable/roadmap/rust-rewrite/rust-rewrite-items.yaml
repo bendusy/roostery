@@ -53,10 +53,10 @@ items:
   - slug: lark-cli-shim
     description: bin/shim 独立二进制，PATH-prefix shim 透传真 lark-cli 并写 journal
     depends_on: [lark-cli-wrapper, journal-core]
-    status: in-progress
+    status: done
     feature: 2026-05-17-lark-cli-shim
     minimal_loop: false
-    notes: "Phase 2；shim 是 ~/.local/bin/lark-cli 装机点，agent runtime 调 lark-cli 必经"
+    notes: "Phase 2；shim 是 ~/.local/bin/lark-cli 装机点，agent runtime 调 lark-cli 必经；streaming bytes 模型（std::thread + std::process）与 LarkRunner buffered Value 模型独立"
 
   - slug: config-yaml
     description: Config schema（§4.6）读写 + 默认值 + schema_version 升级路径
