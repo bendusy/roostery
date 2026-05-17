@@ -45,10 +45,10 @@ items:
   - slug: roostery-smoke
     description: roostery smoke 子命令，跑 6 个 probe 验证矩阵（im / docs / drive）
     depends_on: [lark-cli-wrapper]
-    status: in-progress
+    status: done
     feature: 2026-05-17-roostery-smoke
     minimal_loop: false
-    notes: "Phase 2；probe 命令矩阵以 lark-cli 1.0.28 schema 为准；本机 2026-05-17 实测 1.0.29 同样兼容；引 clap 4 derive 作为项目首个 CLI 解析器；smoke 不走 LarkRunner trait（raw bytes vs buffered Value 同 shim 决定）"
+    notes: "Phase 2；probe 命令矩阵以 lark-cli 1.0.28 schema 为准；本机 2026-05-17 实测 1.0.29 同样兼容；引 clap 4 derive 作为项目首个 CLI 解析器；smoke 不走 LarkRunner trait（raw bytes vs buffered Value 同 shim 决定）；公开 ensure_ready() -> Result<(), SmokeError> 给 init / daily_report 当升级 gate"
 
   - slug: lark-cli-shim
     description: bin/shim 独立二进制，PATH-prefix shim 透传真 lark-cli 并写 journal

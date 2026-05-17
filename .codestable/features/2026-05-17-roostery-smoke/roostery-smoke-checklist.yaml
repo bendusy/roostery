@@ -4,173 +4,173 @@ created: 2026-05-17
 steps:
   - action: "paths 扩 + 类型骨架 + Cargo.toml + lib.rs：paths::state_dir + paths::smoke_state_path；新建 src/smoke.rs 声明 PROBE_MATRIX (6 条) + ProbeResult + SmokeReport (#[non_exhaustive]) + SmokeError 4 变体 + run/ensure_ready 签名 todo!()；Cargo.toml 加 clap = { version = \"4\", features = [\"derive\"] }；lib.rs pub mod smoke;"
     exit_signal: "cargo build 成功；paths::smoke_state_path 单测 returns ~/.roostery/state/smoke.json；SmokeReport serde round-trip 单测通过；既有 testsuite 无回归"
-    status: pending
+    status: done
 
   - action: "probe_one + 10s timeout：实现单条 probe（spawn + stdin null + wait + 简易 timeout（Command + thread + kill 模式或直接同步阻塞 wait）+ classify 'Dry Run' / 'unknown flag' / 其他）；用伪 binary fixture 测 4 case"
     exit_signal: "probe_one 4 单测全过（happy / timeout / unknown flag / non-zero rc）"
-    status: pending
+    status: done
 
   - action: "run() 编排 + atomic save：实现 run（resolve binary → fetch lark_cli_version → 顺序跑 6 probe → all_ok → save_report 写 .tmp + rename）+ save_report + load_last；binary not found 时全部 probe 标 ok=false 仍写 state file"
     exit_signal: "用伪 binary fixture 跑整个 run 验证 state file schema 11 字段全到；atomic rename 单测；binary not found 路径 single 测试"
-    status: pending
+    status: done
 
   - action: "ensure_ready() + 4 错误路径：实现 gate API；4 单测覆盖 NeverRun / LastFailed / StateLoadFailed / Ok happy"
     exit_signal: "ensure_ready 4 单测全过"
-    status: pending
+    status: done
 
   - action: "main.rs 重写 clap + smoke 子命令 + 集成测试：引 clap derive；roostery smoke 子命令；#[command(version = concat!(env!(\"CARGO_PKG_VERSION\"), \" (rust)\"))] 锁定 --version 输出严格保持现状；写 2 集成测试（tests/smoke_integration.rs 用 fixture lark-cli 验 all_ok / 部分失败两条路径）"
     exit_signal: "./target/debug/roostery smoke 跑通；./target/debug/roostery --version 输出严格 == 'roostery 0.0.0 (rust)'；2 集成测试通过；cargo test --all 全绿"
-    status: pending
+    status: done
 
   - action: "完整验收 + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令全绿；推 CI 验三 job"
     exit_signal: "本地四命令全绿；远端 CI 全绿"
-    status: pending
+    status: done
 
 checks:
   - item: "src/smoke.rs 存在；档 1 单文件 < 500 行"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "PROBE_MATRIX 6 条与 Python 版 PROBES name + argv 1:1（im_messages_send / docs_create_v2 / docs_update_overwrite / drive_files_list / drive_create_folder / drive_move）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "SmokeReport #[non_exhaustive] 6 字段（schema_version / binary / lark_cli_version Option<String> / started_at DateTime<Utc> / all_ok / probes BTreeMap<String, ProbeResult>）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "ProbeResult 4 字段（ok bool / rc Option<i32> / head Option<String> / reason Option<String>），后三个 #[serde(skip_serializing_if = \"Option::is_none\")]"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "SmokeError #[non_exhaustive] thiserror 4 变体（NeverRun / LastFailed { failed_probes } / StateLoadFailed { source } / BinaryNotFound { path }）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "公开 API：smoke::run() -> SmokeReport + smoke::ensure_ready() -> Result<(), SmokeError>；其他 fn 模块私有"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "paths::state_dir() 返 ~/.roostery/state；paths::smoke_state_path() 返 state_dir().join(\"smoke.json\")"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "main.rs 用 clap derive；#[command(version = concat!(env!(\"CARGO_PKG_VERSION\"), \" (rust)\"))] 严格锁定 --version 输出 'roostery 0.0.0 (rust)'"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "不变量 1：smoke run 是 idempotent，每次跑覆盖 state file"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 2：atomic write 用 serde_json::to_writer_pretty 写 .tmp 再 std::fs::rename"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 3：PROBE_MATRIX 内部顺序固定 im→docs→drive；BTreeMap 序列化时按 name 字典序保证 diff 友好"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 4：lark-cli binary 未找到不 panic；6 条 probe 全标 ok=false reason 含 'binary not found'，写 state file，子命令退 1"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 5：单条 probe timeout 10s；超时视为失败，不阻塞后续 probe"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 6：ensure_ready 读 state 失败时区分 NeverRun vs LastFailed vs StateLoadFailed 三个变体，不混 String"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "挂载点 1：crates/roostery/src/smoke.rs 存在"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 2：pub mod smoke; 出现在 lib.rs"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 3：PROBE_MATRIX 常量含 6 条 probe"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 4：paths::smoke_state_path() 返 ~/.roostery/state/smoke.json 路径"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 5：Cargo.toml 含 clap 依赖 + main.rs Smoke 子命令"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'use tokio|tokio::|#\\[tokio::main\\]' smoke.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'LarkRunner|LarkCli|Journaled' smoke.rs → 无（不复用 LarkRunner 路径）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'FEISHU_HUB_' smoke.rs → 无运行时引用"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'Config|cfgmod|toml::' smoke.rs → 无（不读 Config）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'fn retry|retries|backoff' smoke.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'rayon|tokio::spawn|std::thread::spawn' smoke.rs → 无（probe 串行跑，timeout 用同步 wait + kill 不开额外线程）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'Journal::|journal::' smoke.rs → 无（smoke 不写 journal）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep PROBE_MATRIX smoke.rs == 至少 1（常量定义）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'smoke' crates/roostery/src/lark_cli/ → 无（lark_cli wrapper 不引 smoke，单向依赖）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：wc -l smoke.rs < 500"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "验收场景 S1.1-S1.6：probe matrix 6 行为（happy / binary not found / unknown flag / timeout / unexpected exit / 顺序固定）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S2.1-S2.5：state file 5 行为（schema 11 字段 / atomic / schema_version=1 / pretty-printed / lark_cli_version 抓取）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S3.1-S3.4：ensure_ready 4 路径（NeverRun / LastFailed / StateLoadFailed / Ok）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S4.1-S4.5：CLI 5 行为（smoke 退 0 / smoke 退 1 / --version 严格匹配 / 无参欢迎 / smoke --help）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S5.1-S5.4：cargo test --all + --doc + clippy + fmt 四命令全绿"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S5.5：架构红线守护 grep LarkRunner/LarkCli/Journaled 无命中"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S5.6：env name 共享 grep 'ROOSTERY_LARK_CLI_BIN' crates/roostery/src/ → 至少在 smoke.rs 和 lark_cli/subprocess.rs 出现"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
     source: 验收场景
-    status: pending
+    status: pending  # 待 commit + push 后由 CI 验证

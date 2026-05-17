@@ -6,3 +6,4 @@ pub mod lark_cli;
 pub mod paths;
 pub mod redact;
 pub mod remoterefs;
+pub mod smoke;

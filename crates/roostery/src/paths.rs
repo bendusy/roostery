@@ -25,6 +25,14 @@ pub fn journal_dir() -> PathBuf {
     roostery_home().join("journal")
 }
 
+pub fn state_dir() -> PathBuf {
+    roostery_home().join("state")
+}
+
+pub fn smoke_state_path() -> PathBuf {
+    state_dir().join("smoke.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -44,6 +52,14 @@ mod tests {
         assert_eq!(
             journal_dir(),
             PathBuf::from("/tmp/roostery-test-override/journal")
+        );
+        assert_eq!(
+            state_dir(),
+            PathBuf::from("/tmp/roostery-test-override/state")
+        );
+        assert_eq!(
+            smoke_state_path(),
+            PathBuf::from("/tmp/roostery-test-override/state/smoke.json")
         );
         unsafe { std::env::remove_var(ENV_HOME) };
     }

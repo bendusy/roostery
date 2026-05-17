@@ -41,6 +41,8 @@
 | `shim` 二进制 | Phase 2 落地的 `bin/shim`（`src/bin/shim.rs`，feature `2026-05-17-lark-cli-shim`）。装到 `~/.local/bin/lark-cli` 作为 PATH-prefix 拦截点；agent runtime 调 `lark-cli` 时被透明截获，shim 流式 tee stdout/stderr 给用户 + 写一条 source="shim" 的 `JournalEntry`，最后 `exec()` / 等待 real lark-cli。与 `Journaled<LarkCli>` 装饰器是两条独立 I/O 路径：shim 是 **streaming bytes**（std::thread + std::process + tee），`Journaled<LarkCli>` 是 **buffered Value**（tokio + serde_json::Value）；语义不同所以不强行抽公共 trait |
 | `ROOSTERY_REAL_LARK_CLI` | shim 读取的 env，指向 real lark-cli 二进制路径；不设 shim 退 127。由 Phase 3 `roostery init` 装机时写入。**不再读** Python 期 `FEISHU_HUB_REAL_LARK_CLI` |
 | `ROOSTERY_NOJOURNAL` | shim 读取的 env，设为 `"1"` 时跳过写完整 journal entry（仍跑 real lark-cli 并 tee 给用户，只追加一条 `action="lark-cli:{verb}:skipped"` + `params.reason="nojournal"` 的标记 entry）。**不再读** Python 期 `FEISHU_HUB_NOJOURNAL` |
+| `Smoke` 模块 | Phase 2 落地的 `crates/roostery/src/smoke.rs`（feature `2026-05-17-roostery-smoke`）。`PROBE_MATRIX` 6 条 `lark-cli {sub} ... --dry-run` 命令（im / docs / drive）顺序跑，分类 `Dry Run` marker + rc==0 = ok；写状态快照 `~/.roostery/state/smoke.json`（`SmokeReport` `schema_version=1` + `lark_cli_version` 字段助升级漂移诊断 + atomic `.tmp` + rename）。公开 `pub fn run() -> SmokeReport` + `pub fn ensure_ready() -> Result<(), SmokeError>` 两条 API。`SmokeError` `#[non_exhaustive]` 4 变体（NeverRun / LastFailed / StateLoadFailed / BinaryNotFound）。**不调 LarkRunner trait**——raw bytes 模型（检 stdout 文本 marker）vs buffered Value 模型语义不同（同 shim 决定） |
+| `roostery smoke` 子命令 | clap derive 主 bin 的第一个真正子命令（feature `2026-05-17-roostery-smoke` 引入 clap 4 derive 作为项目首个 CLI 解析器，后续 init / dispatch 复用）。退 0 = `all_ok` / 退 1 = 至少一条 probe 失败；`--version` 锁定 `roostery 0.0.0 (rust)`（`#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (rust)"))]`）|
 
 ### State ownership
 
@@ -124,7 +126,18 @@
 - 不变量：透明性（用户 stdout/stderr 字节 = real lark-cli 输出）；exit code 透传（setup 失败固定 127）；anti-recursion 强制；journal 写失败 `tracing::warn!` 不影响 exit code；pump 写用户 stream 失败 silent（broken pipe tolerant）；head buffer 超 cap 后继续 tee 但停扩
 - NOJOURNAL=1 路径：仍跑 real lark-cli + tee，但写一条 `action="lark-cli:{verb}:skipped"` + `params.reason="nojournal"` 的标记 entry（"知道发生了但故意没记完整"）
 
-- 子 feature：**`lark-cli-wrapper`（done）** / `roostery-smoke` / **`lark-cli-shim`（done）**
+**smoke 模块**（已落地，feature `2026-05-17-roostery-smoke`，Phase 2）：
+
+- 新文件 `crates/roostery/src/smoke.rs`（档 1 单文件，产品 ~349 行 + 内联单测 ~300 行）；同 crate 复用 `paths` 模块（新增 `state_dir` / `smoke_state_path`）
+- 引入 `clap = "4"` derive 作为项目首个 CLI 解析器；主 bin `roostery` 重写为 clap subcommand 模式（保留 `--version` 输出严格 `roostery 0.0.0 (rust)`）；`Command::Smoke` 是首个子命令
+- `PROBE_MATRIX` 6 条命令：im_messages_send / docs_create_v2 / docs_update_overwrite / drive_files_list / drive_create_folder / drive_move（与 Python 版 `legacy/python/src/roostery/smoke.py::PROBES` 1:1 复刻，本机 2026-05-17 实测 lark-cli 1.0.29 全过）
+- `probe_one` 实现：spawn + `try_wait` 50ms 轮询 + 10s timeout（超时 `kill` + `wait`）；分类 "Dry Run" marker + rc==0 → ok / "unknown flag" / "unknown command" → mismatch / 其他 → unexpected
+- 状态文件 `SmokeReport`（`#[non_exhaustive]` 6 字段：schema_version / binary / lark_cli_version / started_at / all_ok / probes `BTreeMap<String, ProbeResult>` 保证字典序 diff 友好）；`schema_version=1` 公开承诺；`save_report` 写 `.tmp` + `rename` atomic
+- 公开 API：`run() -> SmokeReport` 跑完整矩阵 + 持久化；`ensure_ready() -> Result<(), SmokeError>` 给后续 `roostery init` / `daily_report` 当升级 gate（`SmokeError` `#[non_exhaustive]` 4 变体：NeverRun / LastFailed / StateLoadFailed / BinaryNotFound）
+- 设计约束：**不调 LarkRunner trait**（raw bytes vs buffered Value 同 shim 决定）；**不引 tokio**（同步顺序 6 probe，不需要 runtime）；**不写 journal**（state 快照不是事件流）；**不读 Config**（Phase 3 起来再扩）；binary 解析仅 `ROOSTERY_LARK_CLI_BIN` env > default `"lark-cli"`（与 `lark_cli/subprocess.rs::ENV_BIN` 同字符串）
+- 不变量：smoke run 是 idempotent（覆盖 state）；atomic write；binary 未找到不 panic（6 条全标 ok=false 仍写 state file）；`ensure_ready` 区分 NeverRun / LastFailed / StateLoadFailed 三个 specific 错误变体
+
+- 子 feature：**`lark-cli-wrapper`（done）** / **`roostery-smoke`（done）** / **`lark-cli-shim`（done）**——Module C 完成
 
 ### Module D · 本地配置与安装（Phase 3）
 bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`）、merge Stop hooks 进 `~/.claude/settings.json` / `~/.codex/hooks.json`、装 shim、识别 agent runtime、嵌入模板。
@@ -171,7 +184,12 @@ Feishu Base 作为索引层（**非** source of truth）。
 4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge` + 模板嵌入扩展，loop 不感知 provider
 5. **`llm_summary` 模块是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral
 6. **业务标识符 newtype 隔离**（自 core-remoterefs 起）：对**从飞书侧拿到的、有明确业务语义角色的标识符**（token / id / cursor）一律用 newtype + `#[serde(transparent)]` 隔离类型；不实现互转 `From` impl。Phase 4 dispatcher 的 `TraceId` / `EventId` / `ParentEventId` 是合格候选；**不**适用于"还没成为业务 token 的字符串"（subcommand 名 / 原始 argv / 普通 String 参数）——后者 newtype 化是 noise。详见 `.codestable/compound/` 待归档 convention
-7. **shim 与 LarkRunner 走两条独立 I/O 路径**（自 lark-cli-shim 起）：shim 走 **streaming bytes 模型 + std::thread + std::process**（透明 tee 4 KiB chunks 给用户，head buffer 副本写 journal）；`LarkRunner` 走 **buffered Value 模型 + tokio**（`wait_with_output` 一次性 collect + `serde_json::Value` parse）。两者都写 journal，但 I/O 语义根本不同（streaming vs buffered；用户 stdout 是 first-class vs 仅返 Value 给 caller），所以**不强行抽公共 trait**；只共享下层 `journal` / `redact` / `remoterefs` 模块。下游 read/replay 通过 `JournalEntry.source` 字段（"shim" vs "dispatcher" 等）区分两条路径产生的 entry
+7. **shim / smoke 与 LarkRunner 走三条独立 I/O 路径**（自 lark-cli-shim 起，roostery-smoke 进一步验证）：
+   - **shim**：streaming bytes 模型 + `std::thread::spawn` + `std::process`（透明 tee 4 KiB chunks 给用户，head buffer 副本写 journal）
+   - **smoke**：raw bytes 模型 + 同步 `std::process` + `try_wait` 50ms 轮询（用 stdout 文本检 "Dry Run" marker；不解析 JSON；写 state file 不写 journal）
+   - **`LarkRunner`**：buffered Value 模型 + tokio（`wait_with_output` 一次性 collect + `serde_json::Value` parse；调用结果返给 caller）
+
+   三条路径 I/O 语义根本不同（streaming/raw bytes 检文本 vs buffered Value parse JSON），所以**不强行抽公共 trait**；只共享下层 `journal` / `redact` / `remoterefs` / `paths` 模块。下游 read/replay 通过 `JournalEntry.source` 字段（"shim" / "dispatcher" / ...）+ `~/.roostery/state/smoke.json` 状态文件分流
 
 ## 6. 已知约束 / 硬边界
 
@@ -180,8 +198,8 @@ Feishu Base 作为索引层（**非** source of truth）。
 1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK。**兑现层**：`crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）暴露 `LarkRunner` trait + 三个实现；新模块依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接拼 `Command::new("lark-cli")`（双向引用 `lark_cli/mod.rs` 顶部 docstring）。**装机端兑现链**：feature `2026-05-17-lark-cli-shim` 把 `bin/shim` 装到 `~/.local/bin/lark-cli`（PATH 前段拦截），agent runtime 直接调 `lark-cli` 也被透明截获写 journal 后透传到 real lark-cli——这是同一红线的"客户端绕过路径"封堵，与 wrapper 是同一硬约束的两个兑现层（`crates/roostery/src/bin/shim.rs` 顶部 docstring 反向引用本节）
 2. **本地 state 是 cache 不是真相**。`~/.roostery/`（Rust 期；Python 期 `~/.feishu_hub/`）下任何东西都只是可重放的审计，不回答"任务 X 现在状态如何"
 3. **`llm_summary` 是外部 LLM client import 的唯一允许位置**
-4. **lark-cli 版本 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke
-5. **smoke 是升级后的 gate**。任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行
+4. **lark-cli 版本最低 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke。**1.0.29 已实测兼容**（feature `2026-05-17-roostery-smoke` 2026-05-17 跑通 6 条 PROBE_MATRIX）
+5. **smoke 是升级后的 gate**。任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行。**兑现层**：`crates/roostery/src/smoke.rs::ensure_ready()`（feature `2026-05-17-roostery-smoke`），caller 走 `Result<(), SmokeError>` match 三个具体错误变体（NeverRun / LastFailed / StateLoadFailed）；状态文件 `~/.roostery/state/smoke.json` 含 `lark_cli_version` 字段助升级漂移诊断
 6. **代码-文档优先级**：Python baseline 与最新文档冲突时**以文档为准**（见 attention.md）。Rust port 不机械 1:1 翻译，失配点记观察项
 7. **redact 模块函数纯且幂等**：`redact::scrub_value` / `scrub_argv` / `scrub_text` 不修改入参（接 `&` 借用返回 owned 新值）；对已含 `MASK` 的输入再跑结果等价；audit path 顺序 = 遍历顺序（Phase 1 落地，commit `1e392e5`）
 8. **journal schema_version=1 公开承诺**：自 journal-core 落地起（commit `b9ac5be`），`JournalEntry` 字段名 / 类型 / 序列化形态变更需 bump version + 兼容旧版 deserialize + `cs-roadmap update` 评估 portable-by-default 影响。`Journal::append` 不内建脱敏，caller 自行用 `redact::scrub_value` 过 `params` 后填入

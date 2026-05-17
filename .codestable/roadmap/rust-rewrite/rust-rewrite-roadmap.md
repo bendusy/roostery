@@ -397,9 +397,9 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 6. **`roostery-smoke`** — `roostery smoke` 子命令，跑验证矩阵
    - 所属模块：C
    - 依赖：`lark-cli-wrapper`
-   - 状态：planned
+   - 状态：**done**（feature `2026-05-17-roostery-smoke`）
    - 主要支持的 req：—（验证基础设施）
-   - 备注：Phase 2；6 个 probe 跟 Python 版命令矩阵对齐（im / docs / drive），probe 内容以 Python 版 reference 调整为符合最新 lark-cli 1.0.28 schema
+   - 备注：Phase 2；6 个 probe 跟 Python 版命令矩阵 1:1 复刻（im / docs / drive）；本机 2026-05-17 实测 lark-cli 1.0.29 全过；引 clap 4 derive 作为项目首个 CLI 解析器（main.rs 重写为 subcommand 模式，`--version` 锁定 `roostery 0.0.0 (rust)`）；smoke 不走 LarkRunner trait（raw bytes 检 "Dry Run" marker vs buffered Value parse JSON 同 shim 决定）；公开 `ensure_ready() -> Result<(), SmokeError>` 给 init / daily_report 当升级 gate；状态文件 `~/.roostery/state/smoke.json` schema_version=1 含 `lark_cli_version` 字段助升级漂移诊断；atomic write `.tmp` + rename
 
 7. **`lark-cli-shim`** — `bin/shim` 独立二进制，PATH-prefix shim 透传真 `lark-cli` 并写 journal
    - 所属模块：C
