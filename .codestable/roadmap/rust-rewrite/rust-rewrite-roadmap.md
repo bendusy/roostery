@@ -463,12 +463,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 
 ### Module F · Bot Bridge
 
-15. **`bot-task-writer`** — Task writer：创建 Feishu task + append step stream + session cache
+15. **`bot-task-writer`** — Task writer：创建 Feishu task + append step stream + session cache — **done**（feature `2026-05-18-bot-task-writer`）
     - 所属模块：F
     - 依赖：`lark-cli-wrapper`、`journal-core`、`config-yaml`
-    - 状态：planned
+    - 状态：**done**（feature `2026-05-18-bot-task-writer`）
     - 主要支持的 req：**`agent-work-in-feishu`**（任务卡片这条主路径）
-    - 备注：Phase 5；session cache 本地 schema 重新设计，不继承 Python 版
+    - 备注：Phase 5 Module F 第 1 子 feature。3 pub async fn 纯库 API（`create_task` / `append_steps` / `get_or_create_for_session`）；session_cache JSON schema_version=1 持久化 `~/.roostery/state/session_tasks/`；host suffix 多机区分；safe_filename 路径跳出防御；`append_steps --yes` 架构红线显式破例已归档 ARCHITECTURE.md §6 第 18 条。**首次让 Rust 业务模块真消费 LarkRunner trait 做生产飞书 IO**（dispatcher 不走飞书；smoke / shim 走独立 I/O 路径）。0 新增 Cargo 依赖。顺手 fix：onboarding shell_kind_detect_* 4 测试加 ENV_LOCK 串行化（attention.md 规约）。Accepted 2026-05-18（commit `083b8ba`，CI run #26021247942 全绿）
 
 16. **`bot-stop-hook`** — Stop hook 入口：替代 Python shell→python bridge，原生处理 stdin JSON event，task_writer 主路径 + IM 兜底
     - 所属模块：F

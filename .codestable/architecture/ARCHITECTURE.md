@@ -71,6 +71,10 @@
 | `DispatchOutcome` / `DispatchStep` / `StepStatus` | Phase 4 落地的 `crates/roostery/src/dispatcher.rs`（feature `2026-05-18-dispatcher-loop`）。`DispatchOutcome` 3 字段（`trace_id: TraceId` / `root_event_id: String` / `dispatched: Vec<DispatchStep>`）= 单次 `fire` 编排总览；`DispatchStep` 7 字段（`event_id` / `hook_source` / `depth` / `matched_rule: Option<String>` / `runner_kind: Option<String>` / `status: StepStatus` / `fanout: usize`）= 链式分发中每个 event 一条 step。`StepStatus` 5 态（`Success` / `Skipped { reason }` / `GateRejected { reason }` / `Failed { reason }` / `NoMatch`）覆盖 fire 主链路全部分支可观察结果；`reason` 字符串承载 gate / runner 原始错误描述给 journal 落档 |
 | `DispatchError` | `dispatcher.rs`。dispatcher 编排层错误（与 `RunnerError` / `RulesError` / `BudgetError` 分层不混）。`#[non_exhaustive]` 6 变体（`ConfigLoadFailed` / `RulesLoadFailed` / `JournalDirNotFound` / `ReplayNotFound` / `EventReconstructFailed` / `BadCliInput`）。**`fire` 内部所有 gate / runner 失败不冒泡**——全部走 `journal.append` 落档 + `StepStatus` 反映；`replay` / `test_rule` 因为用户主动调用对错误敏感，DispatchError 直接返给 caller 让 main.rs exit 1。`fire` 主入口加载阶段（config / rules load 失败）目前在 `main.rs::run_fire` 内做 fallback 写 eprintln，未来可改走 DispatchError 路径 |
 | `DEFAULT_MAX_FANOUT` | `dispatcher.rs:28` 公开 `usize = 16` const。`fire` 链式分发的 single-step width 上限（`trace.max_depth` 守深度，本 const 守 width）——单个 runner 返 `emitted_events` 超 16 条时截断 + journal 标 `fanout_truncated`。防 runner bug / 链式风暴把队列撑爆 |
+| `TaskRef` / `TaskGuid` / `TaskWriterError` | Phase 5 落地的 `crates/roostery/src/bot_task_writer.rs`（feature `2026-05-18-bot-task-writer`）。`TaskRef { guid: TaskGuid, url: String }` = 飞书 task 引用（guid 用 newtype 隔离防与 url / event_id / trace_id 等其他 id-like 串混；与 `business-identifier-newtype` decision 一致）。`TaskGuid(String) #[serde(transparent)]`。`TaskWriterError` `#[non_exhaustive]` 5 变体（LarkCallFailed / ResponseShapeUnexpected / CacheLoadFailed / CacheSaveFailed / IdentityResolveFailed）——与 `LarkError` / `IdentityError` 分层不混 |
+| `CreateTaskOptions` / `AppendStepsOptions` | `bot_task_writer.rs`。可选参数集合 `#[non_exhaustive]` + `Default` + lifetime borrow + `new() / with_*` builder API（attention.md E0639 规约要求 builder，不允许 struct literal）。`CreateTaskOptions` 5 字段（`description / assignee_open_id / idempotency_key / host / profile`）；`AppendStepsOptions` 2 字段（`idempotency_key / profile`）|
+| `SESSION_CACHE_SCHEMA_VERSION` | `bot_task_writer.rs:22` 公开 const `= 1`。`~/.roostery/state/session_tasks/{safe}.json` schema 字段名 / 类型 / 序列化形态变更需 bump version + `cs-roadmap update` 评估 + 旧版兼容反序列化。schema_version 缺失走 serde default（0）= 兼容旧版 cache 读 |
+| `DEFAULT_HOST_FALLBACK` | `bot_task_writer.rs:23` 公开 const `= "unknown"`。host suffix 三 fallback 链终态（`ROOSTERY_HOST` env > hostname 首段 > 本兜底）|
 | `SAFE_ENV_FORWARD` | `runners.rs:36` 公开 `&[&'static str]` const allowlist。子进程 env 经此过滤——父 hook 状态（如 `ROOSTERY_AGENT`）**不串到子 agent**避 trace 链断裂。覆盖：POSIX baseline（USER/LOGNAME/SHELL/TMPDIR）+ XDG_* + 代理（HTTP_PROXY etc.）+ TLS CA + API keys（ANTHROPIC/OPENAI/GEMINI/GOOGLE）+ Custom base URLs + 各 vendor config dirs。私有 helper `prep_env(ctx, kind)` 合并 allowlist + POSIX 兜底（PATH/HOME/LANG/TERM）+ trace 三 env（`to_env_pairs()`）|
 | `DEFAULT_TIMEOUT_MS` / `STDOUT_HEAD_CAP` | `runners.rs:30-31` 公开 const，分别 `600_000` (10 min) / `4096` (4 KiB)。CcHeadless 默认 timeout + stdout/stderr 截断阈值 |
 
@@ -263,7 +267,22 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 
 ### Module F · Bot Bridge（Phase 5）
 agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feishu` req 的直接兑现层**。`bot-stop-hook` feature 完成 = "Rust 可用" milestone = 0.1.0 触发判据。
-- 子 feature：`bot-task-writer` / `bot-stop-hook` / `bot-bridge-cluster`
+- 子 feature：**`bot-task-writer`（done）** / `bot-stop-hook` / `bot-bridge-cluster`
+
+**bot_task_writer 模块**（已落地，feature `2026-05-18-bot-task-writer`，Phase 5 第 1 子 feature）：
+
+- **首次让 Rust 业务模块真消费 `LarkRunner` trait 做生产飞书 IO**（dispatcher 不走飞书；smoke 走 raw bytes；shim 走透传 + journal——本模块是首条 buffered Value 业务路径）
+- 新文件 `crates/roostery/src/bot_task_writer.rs`（产品 ~440 行 + 内联测 ~597 行）；`lib.rs` 加 1 pub mod；新测试文件 `tests/bot_task_writer_integration.rs` 3 集成测试；**0 新增 Cargo 依赖**
+- 公开 API（纯库 3 pub async fn，**不**挂 dispatcher registry）：
+  - `bot_task_writer::create_task(runner, agent, cwd, summary, opts) -> Result<TaskRef, TaskWriterError>`
+  - `bot_task_writer::append_steps(runner, &task_guid, steps, opts) -> Result<(), TaskWriterError>`
+  - `bot_task_writer::get_or_create_for_session(runner, agent, session, cwd, summary, opts) -> Result<TaskRef, TaskWriterError>`
+- 关键行为（user 拍板）：
+  - **host suffix** 自动后缀 `· {host}`（`ROOSTERY_HOST` env > hostname 首段 > `DEFAULT_HOST_FALLBACK="unknown"` 三 fallback；幂等不重复加）
+  - **assignee None 走 `identity::current` 注入**；identity 失败返 `Err(IdentityResolveFailed)`，**不** silently 不带 assignee（没 assignee 的 task 不进用户"我的待办"，与 req 核心 UX 冲突）
+  - **session_cache JSON v1** 持久化在 `~/.roostery/state/session_tasks/{safe}.json`；atomic `.tmp` + rename；schema_version 缺失向后兼容 read；safe_filename 防路径跳出（连续 `..` → `__`）
+  - **部分失败语义**：`create_task` OK + `append_steps` Err → 本模块 fn 不耦合 caller 编排；caller 自决；下次 `get_or_create_for_session` 自然走 cache 重试 append
+- caller 编排预期（Phase 5 第 2 子 feature `bot-stop-hook` 拼）：stop hook sh 喂 stdin JSON → `bot_stop_hook` 读 → 调 `get_or_create_for_session` + `append_steps` 把 agent 工作过程串成飞书 task
 
 ### Module G · Reporting（Phase 6）
 日报：git log 聚合 + LLM 摘要 + 写飞书 docx + Base 记录。`llm_summary` 是**唯一**允许 import 外部 LLM client 的模块（架构红线）。Cargo feature flag 控制。
@@ -327,3 +346,4 @@ Feishu Base 作为索引层（**非** source of truth）。
 15. **`dispatcher::fire` 始终 exit 0**（自 feature `2026-05-18-dispatcher-loop` 落地起）：`roostery dispatcher fire` 子命令无论 gate 拒 / runner 失败 / DispatchError 都 `ExitCode::SUCCESS`，失败原因走 journal 落档。**理由**：hook 调用方（CC / Codex SessionEnd sh）对错误不敏感（hook 已结束），分级 exit code 只会污染 hook 链上下游。`replay` / `test-rule` 不在此约束内——这俩用户主动调，DispatchError exit 1 让脚本能感知失败
 16. **emitted_events 链式分发 fanout cap**（自 feature `2026-05-18-dispatcher-loop` 落地起）：`fire` 内部 BFS 队列消费 `RunOutcome.emitted_events` 时，单 step 单批 emitted_events 个数 ≤ `dispatcher::DEFAULT_MAX_FANOUT`（= 16），超出截断 + journal 标 `fanout_truncated`。**理由**：`trace.max_depth` 守深度，但单层 width 也需守门，防 runner bug / 链式风暴把队列撑爆。改 cap 必须改 const + 改 design doc 说明
 17. **`dispatcher.rs` 不直接走飞书 IO + 不直接 spawn**（自 feature `2026-05-18-dispatcher-loop` 落地起）：dispatcher 只做编排——飞书 IO 责任在具体 Runner impl 内部（如 CcHeadless 调 `claude` binary）或后续 Phase 5 `bot-task-writer` feature；子进程 spawn 责任在 Runner impl。`dispatcher.rs` grep `LarkRunner|lark_cli::|reqwest|Command::new|std::process::Command|tokio::process` 必须 0 命中（doc 注释中的 disclaimer 不算）
+18. **`bot_task_writer::append_steps` `--yes` 是 lark-shared 红线显式破例**（自 feature `2026-05-18-bot-task-writer` 落地起）：lark-shared SKILL 红线规定"未经用户同意不加 `--yes`"，本处是 sanctioned 例外——bot 写自己创建的 task 等价 agent 内部行为（append-only step stream，对用户资源无破坏性影响）。**理由链**：(a) `task.agent_task_step_info.append_task_steps` 在 lark-cli 标为 high-risk-write，缺 `--yes` 会 exit 10 `confirmation_required`；(b) 写入对象是 bot 自己 create 的 task（user-created task 写 step 会 10403），所以 bot 写自己的 step ≠ 写用户资源；(c) Python 版 POC 已验证；(d) Rust 版模块顶部 doc + design §1.2 D4 明示。**未来加新破例必须先 update 本节** + 模块顶部 doc 双签
