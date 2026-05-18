@@ -8,7 +8,7 @@ steps:
 
   - action: "名词层 / 配置：role.rs 实装 BotsConfig + BotRole + BOTS_SCHEMA_VERSION=1 + load_bots + BotRoleError 4 变体 + event_matches_bot + extract_message_body"
     exit_signal: "单测覆盖 yaml roundtrip + mention 匹配三种空格 + chat_whitelist 过滤 + schema_version 缺失=1 / =2 报错 / 必填字段缺失报错；cargo test --all 全绿"
-    status: pending
+    status: done
 
   - action: "计算节点（HITL + 进程内信号通道）：hitl.rs 实装 classify + 4 abort 关键词 + 4 adjust 前缀；active_registry.rs 实装 ActiveRunnerRegistry + RunnerHandle + oneshot HitlSignal"
     exit_signal: "单测覆盖 4 abort 命中 / 4 adjust 命中 / adjust 空 body 退化 Pass / 非命中 Pass；oneshot send → receive 信号传递正确；lookup_by_chat_id 多 task 命中第一个"
