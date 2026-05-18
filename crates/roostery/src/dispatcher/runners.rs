@@ -28,6 +28,9 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 
 pub const DEFAULT_TIMEOUT_MS: u64 = 600_000; // 10 min
+/// 上限 24h——任何 cc_headless 调用都不该跑这么久；超过此值视为 args 配置错。
+/// 同时防止 `Instant::now() + Duration::from_millis(timeout_ms)` 算溢出 panic。
+pub const MAX_TIMEOUT_MS: u64 = 86_400_000;
 pub const STDOUT_HEAD_CAP: usize = 4096; // 4 KiB
 
 /// Env vars allowed to flow from the parent process to the spawned runner.
@@ -116,6 +119,8 @@ pub enum RunnerError {
         source: serde_json::Error,
         stdout_head: String,
     },
+    #[error("runner {kind} bad args: {reason}")]
+    BadArgs { kind: &'static str, reason: String },
 }
 
 /// Single agent runtime adapter. Implementations spawn the runtime (CC /
@@ -286,8 +291,10 @@ struct CcArgs {
 struct CcJsonOutput {
     #[serde(default)]
     cost_usd: Option<f64>,
-    #[serde(default, alias = "total_cost_usd")]
-    _total_cost_usd: Option<f64>,
+    /// CC 较新版本输出 `total_cost_usd` 而非 `cost_usd`；二者择一即可。`enrich_cc`
+    /// 用 `cost_usd.or(total_cost_usd)` 取第一个非 None 值喂给 budget。
+    #[serde(default)]
+    total_cost_usd: Option<f64>,
     #[serde(default)]
     result: Option<String>,
     #[serde(default)]
@@ -306,9 +313,26 @@ impl Runner for CcHeadlessRunner {
         ctx: &TraceContext,
         args: &serde_json::Value,
     ) -> Result<RunOutcome, RunnerError> {
-        let parsed: CcArgs = serde_json::from_value(args.clone()).unwrap_or_default();
-        let prompt = parsed.prompt.unwrap_or_default();
+        // 严格解析——结构错或缺 prompt 不静默跑空指令消耗预算。
+        let parsed: CcArgs =
+            serde_json::from_value(args.clone()).map_err(|e| RunnerError::BadArgs {
+                kind: "cc_headless",
+                reason: format!("args parse: {e}"),
+            })?;
+        let prompt = parsed
+            .prompt
+            .filter(|s| !s.is_empty())
+            .ok_or(RunnerError::BadArgs {
+                kind: "cc_headless",
+                reason: "missing or empty `prompt`".into(),
+            })?;
         let timeout_ms = parsed.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+        if timeout_ms == 0 || timeout_ms > MAX_TIMEOUT_MS {
+            return Err(RunnerError::BadArgs {
+                kind: "cc_headless",
+                reason: format!("timeout_ms {timeout_ms} out of range [1, {MAX_TIMEOUT_MS}]"),
+            });
+        }
 
         let bin = match &self.bin_override {
             Some(p) => p.clone(),
@@ -358,9 +382,15 @@ fn spawn_with_timeout(
     env: &HashMap<String, String>,
     timeout_ms: u64,
 ) -> Result<RawProcessOutcome, RunnerError> {
+    use std::io::Read;
     use std::process::{Command, Stdio};
+    use std::thread;
+    // **架构红线**（ARCHITECTURE §6 SAFE_ENV_FORWARD）: 子进程必须从空 env 起，
+    // 仅注入 prep_env allowlist 后的变量；不允许继承父进程的 ROOSTERY_AGENT /
+    // 凭证 / 任意 ROOSTERY_* 变量。`env_clear()` 必须在 `envs()` 之前。
     let mut child = Command::new(bin)
         .args(args)
+        .env_clear()
         .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -380,20 +410,40 @@ fn spawn_with_timeout(
             }
         })?;
 
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    // **deadlock 修复**：stdout / stderr 必须并行 drain，否则子进程输出超 OS
+    // pipe buffer (≥ 64KB) 时 write 阻塞 → 父进程 try_wait 等不到 exit → 误报
+    // timeout。两个 reader thread 各自 read_to_string；主线程只做 try_wait + 时
+    // 间窗口控制；exit 后 join 两 reader。
+    let stdout_h = child.stdout.take();
+    let stderr_h = child.stderr.take();
+    let stdout_join = thread::spawn(move || -> String {
+        let mut s = String::new();
+        if let Some(mut h) = stdout_h {
+            let _ = h.read_to_string(&mut s);
+        }
+        s
+    });
+    let stderr_join = thread::spawn(move || -> String {
+        let mut s = String::new();
+        if let Some(mut h) = stderr_h {
+            let _ = h.read_to_string(&mut s);
+        }
+        s
+    });
+
+    // checked_add 防 timeout_ms 上限校验之外的 Instant 加法溢出 panic（虽然
+    // 调用方已校验 ≤ MAX_TIMEOUT_MS，此处再 defense-in-depth 一层）。
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(timeout_ms))
+        .ok_or(RunnerError::BadArgs {
+            kind: "cc_headless",
+            reason: format!("timeout_ms {timeout_ms} causes Instant overflow"),
+        })?;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let mut stdout = String::new();
-                let mut stderr = String::new();
-                if let Some(mut s) = child.stdout.take() {
-                    use std::io::Read;
-                    let _ = s.read_to_string(&mut stdout);
-                }
-                if let Some(mut s) = child.stderr.take() {
-                    use std::io::Read;
-                    let _ = s.read_to_string(&mut stderr);
-                }
+                let stdout = stdout_join.join().unwrap_or_default();
+                let stderr = stderr_join.join().unwrap_or_default();
                 return Ok(RawProcessOutcome {
                     exit_code: status.code(),
                     stdout,
@@ -442,7 +492,7 @@ fn enrich_cc(raw: RawProcessOutcome) -> RunOutcome {
         match serde_json::from_str::<CcJsonOutput>(&raw.stdout) {
             Ok(body) => {
                 let txt = body.result.or(body.text);
-                (body.cost_usd, txt)
+                (body.cost_usd.or(body.total_cost_usd), txt)
             }
             Err(_) => (None, None),
         }
@@ -791,6 +841,118 @@ EOF
         let out = enrich_cc(raw);
         assert_eq!(out.status, RunnerStatus::Success);
         assert!(out.cost_usd.is_none());
+    }
+
+    #[test]
+    fn enrich_cc_total_cost_usd_alias_picked_up_when_cost_usd_missing() {
+        // codex audit finding-06: 较新 CC 输出 total_cost_usd 而非 cost_usd。
+        let raw = RawProcessOutcome {
+            exit_code: Some(0),
+            stdout: r#"{"total_cost_usd": 0.123, "result": "ok"}"#.to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+        let out = enrich_cc(raw);
+        assert_eq!(out.cost_usd, Some(0.123));
+    }
+
+    #[test]
+    fn enrich_cc_cost_usd_wins_over_total_cost_usd_when_both_present() {
+        let raw = RawProcessOutcome {
+            exit_code: Some(0),
+            stdout: r#"{"cost_usd": 0.5, "total_cost_usd": 0.7, "result": "ok"}"#.to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+        let out = enrich_cc(raw);
+        assert_eq!(out.cost_usd, Some(0.5));
+    }
+
+    // --- codex audit finding-03 / -04: args validation ------------------
+
+    #[tokio::test]
+    async fn cc_headless_missing_prompt_returns_bad_args() {
+        let runner = CcHeadlessRunner {
+            bin_override: Some(PathBuf::from("/bin/true")),
+        };
+        let ctx = TraceContext::new_root(None, 5);
+        let err = runner
+            .run(&dummy_event(), &ctx, &json!({}))
+            .await
+            .expect_err("should reject missing prompt");
+        match err {
+            RunnerError::BadArgs { kind, reason } => {
+                assert_eq!(kind, "cc_headless");
+                assert!(reason.contains("prompt"), "reason: {reason}");
+            }
+            other => panic!("expected BadArgs, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cc_headless_empty_prompt_returns_bad_args() {
+        let runner = CcHeadlessRunner {
+            bin_override: Some(PathBuf::from("/bin/true")),
+        };
+        let ctx = TraceContext::new_root(None, 5);
+        let err = runner
+            .run(&dummy_event(), &ctx, &json!({"prompt": ""}))
+            .await
+            .expect_err("should reject empty prompt");
+        assert!(matches!(err, RunnerError::BadArgs { .. }));
+    }
+
+    #[tokio::test]
+    async fn cc_headless_bad_args_structure_returns_bad_args() {
+        // prompt 字段类型错（应是 string，传 number）
+        let runner = CcHeadlessRunner {
+            bin_override: Some(PathBuf::from("/bin/true")),
+        };
+        let ctx = TraceContext::new_root(None, 5);
+        let err = runner
+            .run(&dummy_event(), &ctx, &json!({"prompt": 42}))
+            .await
+            .expect_err("should reject type mismatch");
+        assert!(matches!(err, RunnerError::BadArgs { .. }));
+    }
+
+    #[tokio::test]
+    async fn cc_headless_timeout_ms_zero_returns_bad_args() {
+        let runner = CcHeadlessRunner {
+            bin_override: Some(PathBuf::from("/bin/true")),
+        };
+        let ctx = TraceContext::new_root(None, 5);
+        let err = runner
+            .run(
+                &dummy_event(),
+                &ctx,
+                &json!({"prompt": "x", "timeout_ms": 0}),
+            )
+            .await
+            .expect_err("zero timeout");
+        assert!(matches!(err, RunnerError::BadArgs { .. }));
+    }
+
+    #[tokio::test]
+    async fn cc_headless_timeout_ms_over_max_returns_bad_args() {
+        let runner = CcHeadlessRunner {
+            bin_override: Some(PathBuf::from("/bin/true")),
+        };
+        let ctx = TraceContext::new_root(None, 5);
+        let err = runner
+            .run(
+                &dummy_event(),
+                &ctx,
+                &json!({"prompt": "x", "timeout_ms": MAX_TIMEOUT_MS + 1}),
+            )
+            .await
+            .expect_err("over-max timeout");
+        match err {
+            RunnerError::BadArgs { reason, .. } => {
+                assert!(reason.contains("out of range"), "reason: {reason}");
+            }
+            other => panic!("expected BadArgs, got {other:?}"),
+        }
     }
 
     #[test]
