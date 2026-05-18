@@ -32,6 +32,9 @@ thiserror = "1"
 tracing = "0.1"
 clap = { version = "4", features = ["derive"] }
 serde_yml = "0.0.12"
+which = "7"
+gethostname = "0.5"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

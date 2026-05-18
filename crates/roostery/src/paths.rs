@@ -37,6 +37,14 @@ pub fn config_path() -> PathBuf {
     roostery_home().join("config.yaml")
 }
 
+pub fn scripts_dir() -> PathBuf {
+    roostery_home().join("scripts")
+}
+
+pub fn env_file() -> PathBuf {
+    roostery_home().join("env")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

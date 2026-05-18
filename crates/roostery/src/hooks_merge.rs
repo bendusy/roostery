@@ -27,6 +27,7 @@ use thiserror::Error;
 
 pub const CC_STOP_HOOK_JSON: &str = include_str!("templates/cc_stop_hook.json");
 pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.json");
+pub const GEMINI_STOP_HOOK_JSON: &str = include_str!("templates/gemini_stop_hook.json");
 pub const STOP_HOOK_AGENT_NOTIFY_SH: &str = include_str!("templates/agent_stop_notify.sh");
 
 const HOOK_SCRIPT_PLACEHOLDER: &str = "{{HOOK_SCRIPT}}";
@@ -43,6 +44,7 @@ const DEFAULT_MATCHER: &str = "*";
 pub enum AgentKind {
     Cc,
     Codex,
+    Gemini,
 }
 
 impl AgentKind {
@@ -51,6 +53,7 @@ impl AgentKind {
         match self {
             AgentKind::Cc => CC_STOP_HOOK_JSON,
             AgentKind::Codex => CODEX_STOP_HOOK_JSON,
+            AgentKind::Gemini => GEMINI_STOP_HOOK_JSON,
         }
     }
 
@@ -58,6 +61,7 @@ impl AgentKind {
         match self {
             AgentKind::Cc => "cc",
             AgentKind::Codex => "codex",
+            AgentKind::Gemini => "gemini",
         }
     }
 }
@@ -74,13 +78,14 @@ impl FromStr for AgentKind {
         match s {
             "cc" => Ok(AgentKind::Cc),
             "codex" => Ok(AgentKind::Codex),
+            "gemini" => Ok(AgentKind::Gemini),
             other => Err(UnknownAgentKind(other.to_string())),
         }
     }
 }
 
 #[derive(Debug, Error)]
-#[error("unknown agent kind: {0:?} (expected one of: cc / codex)")]
+#[error("unknown agent kind: {0:?} (expected one of: cc / codex / gemini)")]
 pub struct UnknownAgentKind(pub String);
 
 // --- Typed hook fragment (B1) ---------------------------------------------
@@ -405,16 +410,19 @@ mod tests {
     fn agent_kind_display_and_parse() {
         assert_eq!(AgentKind::Cc.to_string(), "cc");
         assert_eq!(AgentKind::Codex.to_string(), "codex");
+        assert_eq!(AgentKind::Gemini.to_string(), "gemini");
         assert_eq!(AgentKind::Cc.as_str(), "cc");
         assert_eq!("cc".parse::<AgentKind>().unwrap(), AgentKind::Cc);
         assert_eq!("codex".parse::<AgentKind>().unwrap(), AgentKind::Codex);
-        assert!("gemini".parse::<AgentKind>().is_err());
+        assert_eq!("gemini".parse::<AgentKind>().unwrap(), AgentKind::Gemini);
+        assert!("nushell".parse::<AgentKind>().is_err());
     }
 
     #[test]
     fn agent_kind_template_returns_matching_const() {
         assert_eq!(AgentKind::Cc.template(), CC_STOP_HOOK_JSON);
         assert_eq!(AgentKind::Codex.template(), CODEX_STOP_HOOK_JSON);
+        assert_eq!(AgentKind::Gemini.template(), GEMINI_STOP_HOOK_JSON);
     }
 
     #[test]
@@ -423,6 +431,25 @@ mod tests {
         assert_eq!(v, "\"cc\"");
         let k: AgentKind = serde_json::from_str("\"codex\"").unwrap();
         assert_eq!(k, AgentKind::Codex);
+        let g: AgentKind = serde_json::from_str("\"gemini\"").unwrap();
+        assert_eq!(g, AgentKind::Gemini);
+    }
+
+    #[test]
+    fn gemini_template_nonempty_and_parseable() {
+        assert!(!GEMINI_STOP_HOOK_JSON.is_empty());
+        let v: serde_json::Value = serde_json::from_str(GEMINI_STOP_HOOK_JSON).unwrap();
+        // Same shape as cc/codex: { hooks: { SessionEnd: [...] } }
+        assert!(v["hooks"]["SessionEnd"].is_array());
+    }
+
+    #[test]
+    fn agent_kind_unknown_error_msg_lists_all_three() {
+        let err = "fish".parse::<AgentKind>().unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("cc"));
+        assert!(msg.contains("codex"));
+        assert!(msg.contains("gemini"));
     }
 
     // --- HookFragment typed (B1) ------------------------------------------
