@@ -56,21 +56,22 @@ pub async fn push(req: PushRequest, runner: &dyn LarkRunner, opts: PushOptions) 
     )
     .await;
 
+    // Parameter object 打包 fallback 路径的不变上下文，避免两处调用各传 7 个参数。
+    let fb = FallbackCtx {
+        runner,
+        receive_id: &receive_id,
+        req: &req,
+        step_text: &step_text,
+        basename: &basename,
+        opts: &opts,
+    };
+
     let task_ref = match task_result {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(error = %e, "task_writer.get_or_create_for_session failed");
             outcome.errors.push(format!("task_writer: {e}"));
-            return finish_with_fallback(
-                outcome,
-                runner,
-                &receive_id,
-                &req,
-                &step_text,
-                &basename,
-                &opts,
-            )
-            .await;
+            return finish_with_fallback(outcome, &fb).await;
         }
     };
 
@@ -85,16 +86,7 @@ pub async fn push(req: PushRequest, runner: &dyn LarkRunner, opts: PushOptions) 
         outcome.errors.push(format!("append_steps: {e}"));
         outcome.task_url = Some(task_ref.url.clone());
         outcome.task_guid = Some(task_ref.guid.as_str().to_string());
-        return finish_with_fallback(
-            outcome,
-            runner,
-            &receive_id,
-            &req,
-            &step_text,
-            &basename,
-            &opts,
-        )
-        .await;
+        return finish_with_fallback(outcome, &fb).await;
     }
 
     outcome.status = PushStatus::Success;
@@ -103,38 +95,44 @@ pub async fn push(req: PushRequest, runner: &dyn LarkRunner, opts: PushOptions) 
     outcome
 }
 
+/// `finish_with_fallback` 的不变上下文打包——`push()` 内 task 创建 / append 失败两条
+/// 分支共享同一组参数，提取为 borrow struct 避免 7-arg call site 重复。
+struct FallbackCtx<'a> {
+    runner: &'a dyn LarkRunner,
+    receive_id: &'a str,
+    req: &'a PushRequest,
+    step_text: &'a str,
+    basename: &'a str,
+    opts: &'a PushOptions,
+}
+
 /// task_writer 任一步失败时的尾路径：`opts.no_im_fallback=true` 直接 Failed；否则
 /// 调 lark-cli `im +messages-send` 推一条纯文本 IM 兜底。
-async fn finish_with_fallback(
-    mut outcome: PushOutcome,
-    runner: &dyn LarkRunner,
-    receive_id: &str,
-    req: &PushRequest,
-    step_text: &str,
-    basename: &str,
-    opts: &PushOptions,
-) -> PushOutcome {
-    if opts.no_im_fallback {
+async fn finish_with_fallback(mut outcome: PushOutcome, ctx: &FallbackCtx<'_>) -> PushOutcome {
+    if ctx.opts.no_im_fallback {
         outcome.status = PushStatus::Failed;
         return outcome;
     }
     // IM 文本截 120 字节（task 内 step 截 200；IM 短一点对用户友好）
-    let truncated_for_im = truncate_utf8(step_text, 120);
-    let im_text = format!("[{}] @ {}: {}", req.agent, basename, truncated_for_im);
-    let im_key = stable_idem_key(&[&req.agent, &req.session, "fallback"]);
+    let truncated_for_im = truncate_utf8(ctx.step_text, 120);
+    let im_text = format!(
+        "[{}] @ {}: {}",
+        ctx.req.agent, ctx.basename, truncated_for_im
+    );
+    let im_key = stable_idem_key(&[&ctx.req.agent, &ctx.req.session, "fallback"]);
     let argv = vec![
         "im",
         "+messages-send",
         "--as",
         "bot",
         "--user-id",
-        receive_id,
+        ctx.receive_id,
         "--text",
         &im_text,
         "--idempotency-key",
         &im_key,
     ];
-    match runner.run(&argv).await {
+    match ctx.runner.run(&argv).await {
         Ok(v) => {
             outcome.status = PushStatus::FallbackUsed;
             outcome.fallback_used = true;
