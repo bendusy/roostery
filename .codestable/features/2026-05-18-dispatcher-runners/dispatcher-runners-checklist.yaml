@@ -1,0 +1,172 @@
+feature: 2026-05-18-dispatcher-runners
+created: 2026-05-18
+
+steps:
+  - action: "S1 类型骨架：新建 src/runners.rs；RunnerStatus enum 三态 + RunOutcome struct 5 字段 + RunnerError #[non_exhaustive] 4 变体 + Runner async trait 签名 + RunnerRegistry struct；DEFAULT_TIMEOUT_MS / STDOUT_HEAD_CAP / SAFE_ENV_FORWARD const；fn 签名 todo!()"
+    exit_signal: "cargo build 成功；RunnerStatus serde snake_case 单测；RunnerError display 单测；const 暴露单测"
+    status: pending
+
+  - action: "S2 NoopRunner 实装：kind() = 'noop'；run 返 RunOutcome { status: Success, stdout/stderr 空, emitted_events: vec![], cost_usd: None }"
+    exit_signal: "NoopRunner 2 单测（kind=='noop' + run 返 Success 空字段）"
+    status: pending
+
+  - action: "S3 RunnerRegistry 实装：new() 空 + with_runner(Box) 链式 + find(&str) -> Option<&dyn Runner> linear；with_defaults() 注册 NoopRunner + CcHeadlessRunner"
+    exit_signal: "registry 5 单测（empty / 单注册 find 命中 / find 未命中 / with_defaults 含 2 / 同 kind 二次注册仍返第一）"
+    status: pending
+
+  - action: "S4 env sanitize 私有 helper：prep_env(ctx, runner_name) -> HashMap<String, String>；SAFE_ENV_FORWARD allowlist + trace env 注入（to_env_pairs）+ base env（PATH/HOME/LANG/TERM 兜底）"
+    exit_signal: "prep_env 3 单测（allowlist 过滤 / trace env 注入完整 / base env 兜底）"
+    status: pending
+
+  - action: "S5 CcHeadlessRunner spawn：bin_override 可注入；走 std::process::Command 拼 `claude -p prompt --output-format json [--model m] [--resume id]`；tokio::task::spawn_blocking 包同步；timeout 走 RuleAction.args.timeout_ms（None 用 DEFAULT_TIMEOUT_MS）；binary 不存在返 BinaryNotFound"
+    exit_signal: "CcHeadless 3 单测（binary 不存在 BinaryNotFound / 假 binary 退码 0 返 Success / timeout 触发 RunnerError::Timeout）"
+    status: pending
+
+  - action: "S6 CcHeadlessRunner JSON enrich：stdout JSON parse 解 cost_usd / final_text；解析失败仍返 Success cost None；STDOUT_HEAD_CAP 截断"
+    exit_signal: "enrich 3 单测（完整 JSON 解 cost / 缺 cost 字段 / 非法 JSON 容错返 Success cost None）"
+    status: pending
+
+  - action: "S7 模块挂载 + 集成测试：lib.rs 加 pub mod runners；新建 tests/runners_integration.rs：用真 with_defaults registry + NoopRunner 真跑 + CcHeadless 用 sh -c 假 binary 模拟 happy / timeout / 退码非 0"
+    exit_signal: "lib.rs 1 mod 暴露；集成测试 3+ 全绿；既有 testsuite 无回归"
+    status: pending
+
+  - action: "S8 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；N1-N10 + as_object_mut.unwrap 守护 grep 0 命中；推 CI 验三 job"
+    exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表全 0 命中"
+    status: pending
+
+checks:
+  - item: "src/runners.rs 存在；Runner async trait + 2 method（kind/run）；run 签名 NOT 收 budget 参数（与 roadmap §4.3 偏离已 design §4 标注）"
+    source: 名词契约
+    status: open
+
+  - item: "RunnerStatus enum 三态（Success / Failed { reason } / Skipped { reason }）+ serde rename_all snake_case"
+    source: 名词契约
+    status: open
+
+  - item: "RunOutcome struct 5 字段（status / stdout / stderr / emitted_events / cost_usd: Option<f64>）"
+    source: 名词契约
+    status: open
+
+  - item: "RunnerError #[non_exhaustive] 4 变体（BinaryNotFound / SpawnFailed / Timeout / OutputParseFailed）"
+    source: 名词契约
+    status: open
+
+  - item: "RunnerRegistry 公开 API：new / with_runner / with_defaults / find；with_defaults 自动注册 NoopRunner + CcHeadlessRunner"
+    source: 名词契约
+    status: open
+
+  - item: "NoopRunner 实装；kind() = 'noop'；run 返 Success 空字段"
+    source: 名词契约
+    status: open
+
+  - item: "CcHeadlessRunner 实装；kind() = 'cc_headless'；bin_override 可注入；走 std::process::Command + spawn_blocking"
+    source: 名词契约
+    status: open
+
+  - item: "lib.rs 加 pub mod runners; 1 mod 暴露"
+    source: 挂载点
+    status: open
+
+  - item: "Cargo.toml 不引入 tokio::process / tokio::time（spawn_blocking 包同步 Command）；不引 reqwest / HTTP / 外部 LLM client"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 1：Runner trait async 包同步 Command（spawn_blocking）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 2：env sanitize 经 prep_env 统一 helper；所有 runner 一致"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 3：trace env 注入（ROOSTERY_TRACE_ID / DEPTH / PARENT_EVENT_ID 三 env 经 trace::to_env_pairs）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 4：timeout = RuleAction.args.timeout_ms 覆盖 default 600s"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 5：CC JSON 解析容错——失败仍返 Success cost None"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 6：registry find 未命中返 None 不报错"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 7：RunnerError vs RunOutcome.status.Failed 语义分层（基础设施 vs 业务）"
+    source: 流程级约束
+    status: open
+
+  - item: "idiom #1 强类型：RunOutcome / RunnerStatus / RunnerError 全 struct/enum；解 CC JSON 走 serde derive 中间 struct"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #2 error 颗粒度：RunnerError 4 变体细分；不混 String reason"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #3 newtype：本 feature 不引入新 newtype（runner kind 是 &'static str 字面量 trait return；不立 RunnerKind newtype）"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #4 typestate：不引入"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #5 零拷贝：find 返 &dyn Runner；SAFE_ENV_FORWARD &[&'static str] const"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #6 编译期：DEFAULT_TIMEOUT_MS / STDOUT_HEAD_CAP / SAFE_ENV_FORWARD const"
+    source: idiom checklist
+    status: open
+
+  - item: "守护 grep N1：grep -E 'codex_exec|CodexExec|fn codex' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N2：grep -E 'gemini_headless|GeminiHeadless|fn gemini' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N3：grep -E 'BudgetState|RunawayTracker|CompiledRule|rules::matches' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N4：grep -E 'Command::Runner|Command::Run\\b' src/main.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N5：grep -E 'LarkRunner|lark_cli::' src/runners.rs → 0 命中（runner 不消费 LarkRunner trait）"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N6：grep 'FEISHU_HUB_' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N7：grep -E 'tokio::process|tokio::time::timeout' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N8：grep -E 'emitted_events\\.push' src/runners.rs → 0 命中（始终 vec![]）"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N9：grep -E 'estimated_cost|pre_consume|try_consume' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N10：grep -E '\\bretry\\b|max_retries' src/runners.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep rust-idiom-first：grep -rE 'as_object_mut\\(\\)\\.unwrap\\(\\)|as_array_mut\\(\\)\\.unwrap\\(\\)' src/runners.rs → 0 命中"
+    source: idiom checklist
+    status: open
+
+  - item: "CI 三 job（fmt / clippy / test）远端全绿"
+    source: 模块级
+    status: open

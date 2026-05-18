@@ -101,8 +101,8 @@ items:
   - slug: dispatcher-runners
     description: Runner trait（§4.3）+ cc_headless / codex_exec / gemini_headless / noop 默认实现 + runner_registry
     depends_on: [dispatcher-trace-budget, lark-cli-wrapper]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-18-dispatcher-runners
     minimal_loop: false
     notes: "Phase 4；首发 cc_headless 即可工作，其他可 stub（runtime-neutral req 允许）"
 
