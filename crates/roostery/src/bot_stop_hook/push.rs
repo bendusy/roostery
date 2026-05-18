@@ -157,9 +157,23 @@ async fn finish_with_fallback(mut outcome: PushOutcome, ctx: &FallbackCtx<'_>) -
 /// stdin 非法 JSON / 完全空 / 缺字段都不 panic——`StopHookInput` 全字段 Option
 /// + serde default，最差情况构造一个空 PushRequest 走 Skipped 路径。
 pub async fn run_stop_hook(runner: &dyn LarkRunner, opts: PushOptions) -> PushOutcome {
-    let stdin = std::io::stdin();
-    let mut handle = stdin.lock();
-    run_stop_hook_with_reader(&mut handle, runner, opts).await
+    // Drain stdin into an owned buffer synchronously and release the
+    // `StdinLock` before any `.await`. Holding `StdinLock` across an
+    // await boundary makes the returned future `!Send`, which blocks
+    // future migration to a multi-threaded async runtime.
+    let body: Vec<u8> = {
+        use std::io::Read;
+        let stdin = std::io::stdin();
+        let mut handle = stdin.lock();
+        let mut buf = Vec::new();
+        if let Err(e) = handle.read_to_end(&mut buf) {
+            tracing::warn!(error = %e, "stdin read failed; treating as empty");
+            buf.clear();
+        }
+        buf
+    };
+    let mut cursor = std::io::Cursor::new(body);
+    run_stop_hook_with_reader(&mut cursor, runner, opts).await
 }
 
 /// 测试可注入版本——接受任意 Reader 代替真实 stdin。

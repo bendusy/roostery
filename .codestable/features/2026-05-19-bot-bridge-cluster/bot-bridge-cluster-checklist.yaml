@@ -1,0 +1,160 @@
+feature: 2026-05-19-bot-bridge-cluster
+created: 2026-05-19
+
+steps:
+  - action: "编排骨架：建 bot_bridge/ 子目录 + 7 子模块占位 + clap 子命令 Bridge 变体注册 + run_bridge 空实现 + lib.rs pub mod"
+    exit_signal: "cargo build 全绿 + cargo clippy 0 警告 + `roostery bot bridge --help` 列出 --bots/--profile/--max-concurrency/--max-events/--timeout flags + 空跑（max-events=0 立即返回）退出码 0"
+    status: pending
+
+  - action: "名词层 / 配置：role.rs 实装 BotsConfig + BotRole + BOTS_SCHEMA_VERSION=1 + load_bots + BotRoleError 4 变体 + event_matches_bot + extract_message_body"
+    exit_signal: "单测覆盖 yaml roundtrip + mention 匹配三种空格 + chat_whitelist 过滤 + schema_version 缺失=1 / =2 报错 / 必填字段缺失报错；cargo test --all 全绿"
+    status: pending
+
+  - action: "计算节点（HITL + 进程内信号通道）：hitl.rs 实装 classify + 4 abort 关键词 + 4 adjust 前缀；active_registry.rs 实装 ActiveRunnerRegistry + RunnerHandle + oneshot HitlSignal"
+    exit_signal: "单测覆盖 4 abort 命中 / 4 adjust 命中 / adjust 空 body 退化 Pass / 非命中 Pass；oneshot send → receive 信号传递正确；lookup_by_chat_id 多 task 命中第一个"
+    status: pending
+
+  - action: "编排节点：runner.rs 实装 handle_event（注入 dyn LarkRunner + RunnerRegistry + ActiveRunnerRegistry）+ ADJUST_MAX 循环 + BotAction + HandleEventError"
+    exit_signal: "单测用 MockLarkRunner + 假 Runner 注入 + 覆盖 4 outcome (Success / Failed / Aborted / Timeout) + Adjust 重启路径（attempts=1 终态 / attempts 触上限 aborted）；runner kind 未注册路径返 Skipped + journal 落档"
+    status: pending
+
+  - action: "持久化 + 接力：paths.rs 加 bot_chat_cache_dir helper；relay_task.rs 实装 record_start / record_end / record_adjust + BOT_CHAT_CACHE_SCHEMA_VERSION=1 + cache 文件 atomic .tmp+rename"
+    exit_signal: "单测覆盖同 chat 多次 record_start 写同一 TaskGuid（cache hit）+ cache schema_version 缺失向后兼容 + safe_filename 路径跳出防御 + EndOutcome 四态 step 文案匹配；与已有 bot_task_writer::session_tasks/ 同目录平级不互相干扰"
+    status: pending
+
+  - action: "IM 事件源：event.rs 实装 ImEvent + consume_im（spawn lark-cli im_messages_subscribe 子进程 + BufReader::lines NDJSON 反序列化 + 指数退避重连，cap 60s）+ EventError"
+    exit_signal: "integration test 用 MockLarkRunner 模拟 stdout 多行 NDJSON 流：3 行有效 + 1 行损坏 JSON skip + 子进程 EOF 触发重连；stream Item 数与有效事件数一致"
+    status: pending
+
+  - action: "daemon 主循环：daemon.rs 实装 run_bridge 串 mpsc + per-bot consume_im task + central HITL→spawn handle_event 分流 + tokio::signal::ctrl_c graceful shutdown + BridgeReport 聚合"
+    exit_signal: "integration test 端到端跑：feed 6 条假 event（2 条 @bot + 1 条 /stop + 1 条 /adjust + 1 条 noise + 1 条非匹配 chat），daemon 处理完正常退出，journal 序列含预期 source/action 条目；ctrl_c 触发后 active handle_event 协程 deadline 内退出"
+    status: pending
+
+  - action: "测试覆盖收尾 + 反向核对：补齐 §3 边界 / 错误场景剩余条目 + 跑红线 grep（reqwest / Command::new(\"lark-cli\") / FEISHU_HUB_* / os::unix signal / base_intent_router）确认 bot_bridge/ 内 0 命中"
+    exit_signal: "cargo test --all 全绿 + cargo clippy --all-targets --all-features -- -D warnings 全绿 + cargo fmt --all --check pass + §3 验收契约 N1-N4 / B1-B6 / E1-E4 / G1-G6 全部有可观察证据"
+    status: pending
+
+checks:
+  - item: "BotsConfig + BotRole + BOTS_SCHEMA_VERSION=1 公开承诺 + 4 错误变体到位"
+    source: 名词契约
+    status: pending
+  - item: "HitlDecision 三态 + ABORT_KEYWORDS / ADJUST_PREFIXES const 列表"
+    source: 名词契约
+    status: pending
+  - item: "ActiveRunnerRegistry + RunnerHandle + HitlSignal oneshot channel"
+    source: 名词契约
+    status: pending
+  - item: "EndOutcome 四态（Success/Failed/Aborted/Timeout）+ relay_task 三 fn 签名"
+    source: 名词契约
+    status: pending
+  - item: "BridgeOptions + BridgeReport + run_bridge 主入口签名"
+    source: 名词契约
+    status: pending
+  - item: "ImEvent + consume_im stream API"
+    source: 名词契约
+    status: pending
+  - item: "BridgeCliArgs clap 5 flags + bot 顶层子命令注册 Bridge 变体"
+    source: 挂载点
+    status: pending
+  - item: "~/.roostery/bots.yaml 文档化 schema（schema_version 顶层 + bots 数组）"
+    source: 挂载点
+    status: pending
+  - item: "paths::bot_chat_cache_dir(bot_app_id) helper 新增"
+    source: 挂载点
+    status: pending
+  - item: "journal source/action 命名空间 bot_bridge:* 约定"
+    source: 挂载点
+    status: pending
+  - item: "主流程：consume_im → HITL classify → 命中 lookup+oneshot / 未命中 event_matches_bot → handle_event spawn → register → select runner_result vs kill_signal → Adjust 重启循环 → record_end → reply → unregister"
+    source: 编排骨架
+    status: pending
+  - item: "HITL 判定必须串行先于 spawn handle_event（保 /stop 不被并发 handle_event 抢先）"
+    source: 流程级约束
+    status: pending
+  - item: "幂等性：append_steps idempotency_key = relay:{kind}:{message_id}:{bot_app_id}"
+    source: 流程级约束
+    status: pending
+  - item: "lark-cli subscribe 子进程意外退出 → 指数退避重连，cap 60s；daemon 不退"
+    source: 流程级约束
+    status: pending
+  - item: "graceful shutdown：tokio::signal::ctrl_c → 关 mpsc → 等 active 协程 deadline → 关子进程"
+    source: 流程级约束
+    status: pending
+  - item: "不实现 base_intent / base_intent_router 路由"
+    source: 范围守护
+    status: pending
+  - item: "不沿用 Python --parallel flag / threading model（Rust 走 tokio spawn 默认并发）"
+    source: 范围守护
+    status: pending
+  - item: "不实现 cleanup_orphans（进程内 ActiveRunnerRegistry 不落盘）"
+    source: 范围守护
+    status: pending
+  - item: "不引入 user-customizable abort / adjust 关键词（const 写死）"
+    source: 范围守护
+    status: pending
+  - item: "不沿用 relay_writer_app_id 跨身份 profile 转向"
+    source: 范围守护
+    status: pending
+  - item: "不沿用 POSIX os::kill / SIGTERM / SIGKILL（走 tokio oneshot channel）"
+    source: 范围守护
+    status: pending
+  - item: "N1：单 bot 单次 @ → 飞书出 task + step 流 + thread reply 含 task URL"
+    source: 验收场景
+    status: pending
+  - item: "N2：同 chat 连续 @ → 同一 TaskGuid 接力 step"
+    source: 验收场景
+    status: pending
+  - item: "N3：--max-events 5 处理完正常退出 + BridgeReport 输出"
+    source: 验收场景
+    status: pending
+  - item: "N4：多 bot 各自缓存目录隔离"
+    source: 验收场景
+    status: pending
+  - item: "B1：U+0020 / U+00A0 / U+3000 三种 mention 空格分隔都识别"
+    source: 验收场景
+    status: pending
+  - item: "B2：schema_version 缺失=1 / =2 SchemaVersionMismatch"
+    source: 验收场景
+    status: pending
+  - item: "B3：MissingField 含 index + field 名"
+    source: 验收场景
+    status: pending
+  - item: "B4：chat_whitelist 命中过滤"
+    source: 验收场景
+    status: pending
+  - item: "B5：/adjust 触上限 ADJUST_MAX 后转 aborted"
+    source: 验收场景
+    status: pending
+  - item: "B6：/stop 触 oneshot 中止 + step ⚠️ 反向 reply"
+    source: 验收场景
+    status: pending
+  - item: "E1：subscribe 子进程退出指数退避重连"
+    source: 验收场景
+    status: pending
+  - item: "E2：create_task 失败不阻塞 runner 主路径"
+    source: 验收场景
+    status: pending
+  - item: "E3：runner kind 不存在 → Skipped + 友好 reply"
+    source: 验收场景
+    status: pending
+  - item: "E4：handle_event 协程 panic 隔离不影响 daemon"
+    source: 验收场景
+    status: pending
+  - item: "G1：bot_bridge/ 内 0 reqwest / Command::new(\"lark-cli\") / Command::new(\"claude\")"
+    source: 范围守护
+    status: pending
+  - item: "G2：bot_bridge/ 内 0 FEISHU_HUB_*"
+    source: 范围守护
+    status: pending
+  - item: "G3：bot_bridge/ 内 0 os::unix / signal::SIGTERM / signal::SIGKILL / nix::"
+    source: 范围守护
+    status: pending
+  - item: "G4：bot_bridge/ 内 0 base_config / base_indexer / base_intent_router"
+    source: 范围守护
+    status: pending
+  - item: "G5：clap subcommand tree 不出现 --parallel"
+    source: 范围守护
+    status: pending
+  - item: "G6：bot_bridge/ 内 0 relay_writer_app_id"
+    source: 范围守护
+    status: pending

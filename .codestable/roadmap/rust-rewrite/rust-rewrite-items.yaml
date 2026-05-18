@@ -133,8 +133,8 @@ items:
   - slug: bot-bridge-cluster
     description: bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router 合并实现
     depends_on: [bot-stop-hook]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-19-bot-bridge-cluster
     minimal_loop: false
     notes: "Phase 5；启动前可能需要 cs-arch new 梳理 Python 版耦合行为（见 §7 观察项）"
 
