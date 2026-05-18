@@ -489,11 +489,29 @@ mod tests {
     }
 
     #[test]
-    fn sh_template_calls_roostery_dispatcher_fire() {
-        assert!(STOP_HOOK_AGENT_NOTIFY_SH.contains("roostery dispatcher fire"));
+    fn sh_template_calls_roostery_bot_stop_hook() {
+        // Phase 5 (bot-stop-hook feature): sh wrapper 退化为极简 stdin 直透
+        // 调 `roostery bot stop-hook`，由 Rust 端原生处理 transcript / push。
+        assert!(STOP_HOOK_AGENT_NOTIFY_SH.contains("roostery bot stop-hook"));
+        assert!(!STOP_HOOK_AGENT_NOTIFY_SH.contains("roostery dispatcher fire"));
         assert!(!STOP_HOOK_AGENT_NOTIFY_SH.contains("python3 -m roostery"));
         assert!(STOP_HOOK_AGENT_NOTIFY_SH.contains("ROOSTERY_AGENT"));
         assert!(!STOP_HOOK_AGENT_NOTIFY_SH.contains("FEISHU_HUB_AGENT"));
+        // 极简性核查：<= 10 非空非注释行
+        let code_lines = STOP_HOOK_AGENT_NOTIFY_SH
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                !t.is_empty() && !t.starts_with('#')
+            })
+            .count();
+        assert!(
+            code_lines <= 10,
+            "极简 wrapper：non-comment lines = {code_lines}; 期望 <= 10"
+        );
+        // 极简性核查：不再 jq / tail / extract
+        assert!(!STOP_HOOK_AGENT_NOTIFY_SH.contains("jq"));
+        assert!(!STOP_HOOK_AGENT_NOTIFY_SH.contains("tac"));
     }
 
     // --- render ----------------------------------------------------------

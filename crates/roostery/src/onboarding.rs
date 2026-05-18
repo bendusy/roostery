@@ -531,12 +531,7 @@ pub fn format_report(report: &InitReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// 串行化所有触碰 `$SHELL` 的测试——attention.md 规约"测试中并发触碰 env
-    /// 必须用 static Mutex 串行化"。否则 cargo test 默认 multi-thread 跑会让
-    /// 这 4 个 `shell_kind_detect_*` 测试互相覆盖 env，CI 偶发 fail。
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::paths::TEST_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn shell_kind_detect_zsh() {

@@ -1,47 +1,10 @@
 #!/usr/bin/env bash
-# CC / Codex SessionEnd hook 共用脚本：从 stdin 读 hook JSON，调 roostery dispatcher fire。
-# Phase 3 hooks-merge 落地，Phase 4 dispatcher 起来后才能正常工作；
-# Phase 3 期间触发会拿到 clap "unknown subcommand" 错误，末尾 `|| true` 吞掉
-# 不阻塞 agent runtime。
+# CC / Codex / Gemini SessionEnd 极简 wrapper：stdin JSON 直透给
+# `roostery bot stop-hook`，Rust 端原生处理（解析 / transcript tail / push
+# 到飞书 / IM 兜底）。
 #
-# 设计依据（同 Python parity，sh 解析 stdin → 抽 summary → 调底层入口）：
-# - CC `SessionEnd` 是每会话一次（agent 退出时）；stdin 没有 last_assistant_message
-# - 拿最终 agent 回复要 tail transcript_path jsonl 最后一条 assistant message
+# 安装：`roostery init` 写到 `~/.roostery/scripts/agent_stop_notify.sh`
+# 触发：CC/Codex/Gemini stop hook JSON 里命令 `ROOSTERY_AGENT=cc <path>`
+# 退出：始终 0，不阻塞 agent runtime（错误观察走 ~/.roostery/journal/）
 set -u
-
-HOOK_JSON="$(cat || true)"
-
-extract() {
-  local key="$1"
-  if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$HOOK_JSON" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null
-  fi
-}
-
-CWD="$(extract cwd)"
-SESSION="$(extract session_id)"
-TRANSCRIPT="$(extract transcript_path)"
-
-# 优先 transcript_path tail；其次 prompt_response（Gemini 风格）；再次空
-SUMMARY=""
-if [ -n "${TRANSCRIPT:-}" ] && [ -f "${TRANSCRIPT:-}" ] && command -v jq >/dev/null 2>&1; then
-  SUMMARY="$(tac "$TRANSCRIPT" 2>/dev/null \
-    | jq -r 'select(.type=="assistant") | .message.content[0].text // empty' 2>/dev/null \
-    | head -n 1 \
-    | head -c 200)"
-fi
-if [ -z "${SUMMARY:-}" ]; then
-  SUMMARY="$(extract prompt_response | head -c 200)"
-fi
-
-[ -z "${CWD:-}" ] && CWD="$PWD"
-
-AGENT="${ROOSTERY_AGENT:-unknown}"
-
-# 调 Rust dispatcher 入口；任何错误吞掉不阻塞 agent。
-roostery dispatcher fire \
-  --agent "$AGENT" \
-  --session "${SESSION:-no-session}" \
-  --cwd "$CWD" \
-  --summary "${SUMMARY:-}" \
-  >/dev/null 2>&1 || true
+ROOSTERY_AGENT="${ROOSTERY_AGENT:-unknown}" exec roostery bot stop-hook

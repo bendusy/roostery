@@ -18,7 +18,7 @@
 ### 测试
 
 - 飞书相关功能测试一律用 `LarkRunner` trait 的 mock 实现（Rust Phase 2 起）；不要写跑真飞书的测试除非显式标 `#[ignore]` e2e 并由人手跑
-- Rust 2024 edition `std::env::set_var` / `remove_var` 是 `unsafe`，写 env 的生产代码需 `unsafe {}` 块，测试中并发触碰 env 必须用 `static Mutex` 串行化避免数据竞争（参考 `crates/roostery/src/paths.rs` `ENV_LOCK` 模式）
+- Rust 2024 edition `std::env::set_var` / `remove_var` 是 `unsafe`，写 env 的生产代码需 `unsafe {}` 块。测试中并发触碰 env **必须用 crate-wide 共享 Mutex 串行化**——用 `crate::paths::TEST_ENV_LOCK`（而非各模块自己声明 `static Mutex<()>`）。**修订原因**（bot-stop-hook feature S10.5 2026-05-18）：之前每个 mod 在 `mod tests` 里各自声明 ENV_LOCK，多 mod 同时跑触碰同 env var（如 `ROOSTERY_HOME`）时 race，一旦因 race 失败 panic 还会 poison 该 mod 的 lock 连锁拖挂同 mod 后续 env 测试。**Corollary**：任何在 `fn` 内消费 `paths::roostery_home()` / `paths::journal_dir()` 等 env-dependent helper 的测试也要锁——典型如 config roundtrip 测试，`Config::default()` 里 `journal.dir = paths::journal_dir()` 会读 env 当前值，race 会让 before/after snapshot 不等
 - 测试中创建可执行 fixture 文件再立即 `execve` 时用 `std::fs::write(path, content)` **不要** `File::create + write_all + drop` —— Linux 后者有 ETXTBSY race（fd close 与 execve 之间窗口；macOS 不报这个错），CI 偶发 `ExecutableFileBusy`。参考 `crates/roostery/src/lark_cli/subprocess.rs::fixture_script`
 
 ### 命令与脚本陷阱

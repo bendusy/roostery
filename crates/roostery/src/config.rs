@@ -216,6 +216,7 @@ pub fn save_to(cfg: &Config, path: &Path) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::TEST_ENV_LOCK;
 
     #[test]
     fn default_has_schema_version_one() {
@@ -415,6 +416,10 @@ runners:
 
     #[test]
     fn save_then_load_round_trip() {
+        // Config::default() reads ROOSTERY_HOME via paths::journal_dir(); lock
+        // shared TEST_ENV_LOCK so parallel env-mutating tests don't race the
+        // before/after Default snapshots.
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c.yaml");
         let original = Config {
@@ -431,6 +436,7 @@ runners:
 
     #[test]
     fn save_default_round_trip() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("c.yaml");
         save_to(&Config::default(), &path).unwrap();

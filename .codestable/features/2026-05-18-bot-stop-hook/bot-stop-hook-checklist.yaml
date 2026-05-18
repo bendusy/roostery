@@ -1,0 +1,164 @@
+feature: 2026-05-18-bot-stop-hook
+created: 2026-05-18
+
+steps:
+  - action: "S1 类型骨架：新建 src/bot_stop_hook.rs；PushRequest (builder API: new + with_summary / with_description / with_assignee) + PushOptions (Default; strict / json_output / no_im_fallback) + PushOutcome (#[derive(serde::Serialize)]) + PushStatus enum (#[serde(rename_all = snake_case)]: Success/FallbackUsed/Failed/Skipped) + StopHookInput (#[serde(default)]) 类型定义；push / run_stop_hook / run_push 三 pub fn 签名 todo!()"
+    exit_signal: "cargo build 成功；类型 trivial 单测 3 条（builder 链 / PushOutcome serde roundtrip / PushStatus snake_case 序列化）"
+    status: done
+
+  - action: "S2 计算层纯函数 + transcript_reader inline mod：truncate_utf8 (floor_char_boundary 多字节安全) + cwd_basename (Path 提取最后段) + stable_idem_key (blake3 8-char hex) + resolve_summary_from_hook_input (transcript > prompt_response > None 链) + inline mod transcript_reader { read_last_assistant_text(path, max_bytes) + TranscriptReadError (NotFound/Io/NoAssistantMessage) }"
+    exit_signal: "7 单测（transcript happy / 大文件 10MB tail 仅块读 / 无 assistant 返 Err / NotFound / truncate UTF-8 边界含 emoji / idem key 同输入稳态 / basename 各种 path 含 trailing slash）；Cargo.toml 加 blake3 dep"
+    status: done
+
+  - action: "S3 receive_id 三层链 helper：async fn resolve_receive_id(runner, explicit_assignee: Option<&str>) -> Option<String>；优先 explicit_assignee > env ROOSTERY_NOTIFY_TO > identity::current(runner).await?.user_open_id > Config::load()?.identity.user_id（非空时取）；任一层失败不当 fatal 走下一层"
+    exit_signal: "5 单测（explicit 直返 / env 命中跳过 identity / identity 命中 / config 兜底 / 全空返 None）"
+    status: done
+
+  - action: "S4 push 核心 lib fn：pub async fn push(req, runner, opts) -> PushOutcome；编排 resolve_receive_id → if None 返 Skipped → task_writer.get_or_create_for_session → task_writer.append_steps → 成功返 Success / 任意错按 no_im_fallback flag 决定走 IM 兜底（lark-cli im +messages-send）或直接 Failed；IM 兜底成功返 FallbackUsed / 失败返 Failed；outcome.errors 累积人类可读错误摘要"
+    exit_signal: "MockLarkRunner 集成单测 8 条（happy / explicit assignee 跳层 / receive_id 全空 Skipped / task fail → IM 兜底 FallbackUsed / task + IM 双失败 Failed / no_im_fallback 时 task fail 直接 Failed / append_steps 失败也走 IM / Skipped 时不调任何 lark-cli）"
+    status: done
+
+  - action: "S5 stop-hook CLI 适配：pub async fn run_stop_hook(runner, opts) -> PushOutcome；read_stdin_json::<StopHookInput>（失败 outcome.status=Failed + errors push parse 错误，不 panic）→ agent = env ROOSTERY_AGENT or 'unknown' → resolve_summary（含 transcript_reader 调用）→ cwd = input.cwd or env::current_dir → session = input.session_id or 'no-session' → 构造 PushRequest → 调 push fn"
+    exit_signal: "4 单测（CC happy stdin / 空 stdin 全 default / transcript NotFound 退回 prompt_response / stdin 非法 JSON outcome.Failed 不 panic）"
+    status: done
+
+  - action: "S6 push CLI 适配 + clap args：BotSub::Push(PushCliArgs)；PushCliArgs (clap derive): --agent / --session required, --cwd / --summary / --description / --assignee-open-id optional, --summary-stdin bool, --strict / --json / --no-im-fallback bool；ArgGroup summary 互斥 (--summary vs --summary-stdin)；pub async fn run_push(args, runner, opts) -> PushOutcome；从 args 构造 PushRequest 调 push fn"
+    exit_signal: "5 单测（flag-based happy / --summary-stdin 读 stdin / 互斥校验 clap 报错 / --description 透传 / --assignee-open-id 透传）"
+    status: done
+
+  - action: "S7 main.rs 接线：Command 枚举加 Bot(BotArgs) 变体；BotArgs { subcmd: BotSub } 在 bot_stop_hook::cli 模块（不塞 main.rs）；main.rs 仅一行 dispatch Command::Bot(a) => bot_stop_hook::cli::run(a)；tokio rt + Journaled<LarkCli> runner 注入；--json 时 outcome 序列化到 stdout / 默认空 stdout；--strict 时 outcome.status=Failed → exit 1 / 其他 exit 0；lib.rs 加 pub mod bot_stop_hook"
+    exit_signal: "cargo build 全绿；cargo run -- bot stop-hook --help 显示文档；cargo run -- bot push --help 显示文档；clap dispatch 接通"
+    status: done
+
+  - action: "S8 CLI 集成测试：新建 tests/bot_cli_integration.rs；assert_cmd 跑真 binary + PATH 注入 mock lark-cli 脚本 + ROOSTERY_HOME tempdir 隔离；4 条 e2e（stop-hook stdin + push flag + push --summary-stdin --json 解析 / push --strict task fail exit 1）"
+    exit_signal: "cargo test --test bot_cli_integration 全绿"
+    status: done
+
+  - action: "S9 模板替换 + onboarding golden：crates/roostery/src/templates/agent_stop_notify.sh 改为 '#!/usr/bin/env bash\\nset -u\\nROOSTERY_AGENT=${ROOSTERY_AGENT:-cc} exec roostery bot stop-hook'；include_str! 自动重读；onboarding::install_templates golden test 更新（仅 sh 内容字节）"
+    exit_signal: "cargo test onboarding::install_templates 全绿；模板内容 <5 行 + 无 jq/tail/extract"
+    status: done
+
+  - action: "S10.5 测试 ENV_LOCK 跨模块 race 修复（implement 阶段反射检查触发，user 拍板 2026-05-18）：paths.rs 提 pub(crate) static TEST_ENV_LOCK: Mutex<()>（不上 cfg(test) 以跨模块共享）；paths/bot_task_writer/onboarding/bot_stop_hook tests mod 都换用 crate::paths::TEST_ENV_LOCK；attention.md 顺手补一条 测试 env 串行化必须用 crate-wide 共享 Mutex 的修订（覆盖原 各模块自有 ENV_LOCK 模式）。只搬不改行为：编译绿灯 + 测试断言不变。"
+    exit_signal: "cargo test --all 并行模式全绿（不需 --test-threads=1）；attention.md '测试' 节加一条共享 Mutex 修订"
+    status: done
+
+  - action: "S10 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；N1-N3 (no dispatcher fire / no reqwest / no notify_receive_id 新字段) + idiom grep (blake3 ≥1 处) 全 0 命中；推 CI 验三 job"
+    exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表全 0 命中（除应有的 blake3）"
+    status: done
+
+checks:
+  - item: "src/bot_stop_hook.rs 存在；push 是 pub async fn；run_stop_hook / run_push 是 pub async fn"
+    source: 名词契约
+    status: done
+
+  - item: "PushRequest builder API（new + with_summary + with_description + with_assignee）"
+    source: 名词契约
+    status: done
+
+  - item: "PushOptions 三 bool 字段（strict / json_output / no_im_fallback）+ Default impl"
+    source: 名词契约
+    status: done
+
+  - item: "PushOutcome 字段（status / task_url / task_guid / fallback_used / fallback_im_message_id / errors）全 pub + serde::Serialize derive"
+    source: 名词契约
+    status: done
+
+  - item: "PushStatus 4 变体（Success / FallbackUsed / Failed / Skipped）+ #[serde(rename_all = snake_case)]"
+    source: 名词契约
+    status: done
+
+  - item: "StopHookInput #[serde(default)] + 全字段 Option"
+    source: 名词契约
+    status: done
+
+  - item: "transcript_reader inline mod 含 read_last_assistant_text + TranscriptReadError 3 变体"
+    source: 名词契约
+    status: done
+
+  - item: "lib.rs 加 pub mod bot_stop_hook; 1 mod 暴露"
+    source: 挂载点
+    status: done
+
+  - item: "main.rs Command::Bot 变体注册；BotSub::{StopHook, Push} 二级子命令"
+    source: 挂载点
+    status: done
+
+  - item: "Cargo.toml 仅新增 blake3 一个 dep（thiserror / serde / serde_json / tracing / clap / tokio 全部既有）"
+    source: 流程级约束
+    status: done
+
+  - item: "templates/agent_stop_notify.sh 内容简化为极简 wrapper（<5 行 + 无 jq/tail/extract）"
+    source: 挂载点
+    status: done
+
+  - item: "不变量 1：push fn take &dyn LarkRunner 依赖注入"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 2：不绕过 LarkRunner trait（红线 N3 / N4 守护）；grep reqwest / open.feishu.cn 在 bot_stop_hook.rs 为 0"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 3：不调 roostery dispatcher fire（grep dispatcher::fire 在 bot_stop_hook.rs 为 0）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 4：不引入 config.identity.notify_receive_id 新字段（config.rs Identity struct 不变）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 5：idempotency key 用 blake3（grep blake3:: 在 bot_stop_hook.rs ≥ 1 处；非 std::hash）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 6：默认 exit 0；仅 --strict + status=Failed 时 exit 1（Skipped 不算错误）"
+    source: 流程级约束
+    status: done
+
+  - item: "summary 截断走 floor_char_boundary（grep floor_char_boundary 在 bot_stop_hook.rs ≥ 1 处）"
+    source: 计算层
+    status: done
+
+  - item: "A1 stop-hook stdin 完整 JSON → task 创建 + step 追加（MockLarkRunner 集成测）"
+    source: 验收契约
+    status: done
+
+  - item: "A5 push CLI flag-based 反向调用 happy path"
+    source: 验收契约
+    status: done
+
+  - item: "A6 push CLI --summary-stdin + --json + --strict 三 flag 协作"
+    source: 验收契约
+    status: done
+
+  - item: "B1 stop-hook 非法 stdin JSON outcome.Failed 不 panic + 默认 exit 0"
+    source: 验收契约
+    status: done
+
+  - item: "B4 push CLI --summary 与 --summary-stdin 互斥 clap 报错"
+    source: 验收契约
+    status: done
+
+  - item: "B7 receive_id 三层全空 → Skipped；strict 时仍 exit 0"
+    source: 验收契约
+    status: done
+
+  - item: "E1 task_writer LarkCallFailed → IM 兜底 → FallbackUsed"
+    source: 验收契约
+    status: done
+
+  - item: "E3 --no-im-fallback 时 task fail 直接 Failed 不走 IM"
+    source: 验收契约
+    status: done
+
+  - item: "E4 task + IM 双失败 → Failed + errors 2 条"
+    source: 验收契约
+    status: done
+
+  - item: "本地 cargo test --all + cargo test --doc + cargo clippy -- -D warnings + cargo fmt --check 全绿"
+    source: 流程级约束
+    status: done
+
+  - item: "远端 CI 三 job 全绿"
+    source: 流程级约束
+    status: done

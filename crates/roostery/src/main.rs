@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use roostery::bot_stop_hook;
 use roostery::config;
 use roostery::dispatcher::hook_event::{HOOK_EVENT_SCHEMA_VERSION, HookEvent};
 use roostery::dispatcher::rules;
@@ -33,6 +34,8 @@ enum Command {
     Init(InitArgs),
     /// Dispatcher main loop: fire / replay / test-rule.
     Dispatcher(DispatcherArgs),
+    /// Bot bridge: stop-hook (passive) + push (reverse-call) — Module F.
+    Bot(bot_stop_hook::cli::BotArgs),
 }
 
 #[derive(Args)]
@@ -127,6 +130,7 @@ fn main() -> ExitCode {
         }
         Some(Command::Init(args)) => run_init(args),
         Some(Command::Dispatcher(args)) => run_dispatcher(args),
+        Some(Command::Bot(args)) => bot_stop_hook::cli::run(args),
     }
 }
 

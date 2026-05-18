@@ -494,8 +494,7 @@ mod tests {
 
     // --- S2 host suffix tests --------------------------------------------
 
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::paths::TEST_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn host_default_uses_roostery_host_env() {

@@ -53,12 +53,23 @@ pub fn rules_path() -> PathBuf {
     roostery_home().join("rules.yaml")
 }
 
+/// 跨模块共享的测试 env 串行化锁。**所有**改 `ROOSTERY_*` / `HOSTNAME` /
+/// `FEISHU_*` 等进程级 env 的 `#[test]` / `#[tokio::test]` 都必须先 `lock()`
+/// 这个 Mutex。
+///
+/// 历史教训（bot-stop-hook feature S10.5 修复）：之前每个模块在自己 `mod tests`
+/// 里各自声明 `static ENV_LOCK: Mutex<()>`，多模块同时跑触碰同 env var 时
+/// race（一个 mod 的 lock 不能阻挡另一个 mod 的 set_var）。任意 test 因 race
+/// 失败 panic 会 poison 该 mod 的 lock，连锁让同 mod 后续 env 测试全挂。
+///
+/// 不上 `#[cfg(test)]` 是有意——使 `crates/roostery/tests/*.rs` 的集成测试
+/// 同样能引用。运行期开销是一个 zero-sized Mutex<()>，可以忽略。
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
+    use super::TEST_ENV_LOCK as ENV_LOCK;
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn env_override_wins() {

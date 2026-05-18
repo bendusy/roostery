@@ -123,12 +123,12 @@ items:
     notes: "Phase 5 Module F 第 1 子 feature；session cache 本地 schema 重新设计 schema_version=1 不继承 Python 版。Design 关键决策（user 拍板 2026-05-18）：(a) 纯库 API 3 pub fn（create_task / append_steps / get_or_create_for_session），不挂 dispatcher registry；(b) host suffix 保留（ROOSTERY_HOST env > hostname 首段，Python parity）；(c) 部分失败 Ok(TaskRef) + 独立 log；(d) append_steps --yes 架构红线显式破例已进 ARCHITECTURE §6 第 18 条归档；(e) assignee None 走 identity::current 失败返 Err。首次让 Rust 业务模块真消费 LarkRunner trait 做生产飞书 IO。0 新增 Cargo dep。顺手 fix（不是本 feature 范畴但触发暴露）：onboarding shell_kind_detect_* 4 测试加 ENV_LOCK 串行化（attention.md 规约）。Accepted 2026-05-18（commit 083b8ba，CI run #26021247942 全绿）"
 
   - slug: bot-stop-hook
-    description: Stop hook 入口，原生处理 stdin JSON event，task_writer 主路径 + IM 兜底
+    description: Stop hook 入口 + 反向调用 CLI；双 CLI surface 共享 bot::push 核心 lib fn；任意 agent / 脚本可推送到飞书
     depends_on: [bot-task-writer, dispatcher-loop, roostery-init]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-18-bot-stop-hook
     minimal_loop: true
-    notes: "Phase 5；🎯 最小闭环：完成后 CC headless 在飞书出 task；0.1.0 release 触发判据"
+    notes: "Phase 5；🎯 最小闭环：完成后 CC headless 在飞书出 task；0.1.0 release 触发判据。Design 关键决策（user 拍板 2026-05-18）：(a) 双 CLI surface — roostery bot stop-hook（被动 hook stdin JSON）+ roostery bot push（反向调用 flag/stdin），共享同一 push lib fn；(b) Rust 红利显式发挥 — 类型化 PushRequest builder + PushOutcome 结构化输出 + --json stdout + --strict opt-in 真实 exit code + blake3 稳态 idempotency key + structured tracing；(c) receive_id 三层链 env ROOSTERY_NOTIFY_TO > identity::current > config.identity.user_id（不引入新字段）；(d) summary 抽取（CC transcript jsonl tail）在 Rust 层；agent_stop_notify.sh 退化为极简 wrapper；(e) 不调 dispatcher fire — push 与 dispatcher 两条独立顶层入口；(f) 主流程错误分类 LarkCallFailed 与其他都走 IM 兜底（--no-im-fallback opt-out）；(g) main.rs 仅顶层 dispatch — Bot args + run 放 bot_stop_hook::cli 模块（implement 跑通后可走 cs-decide 归档 convention）。新增 dep：blake3"
 
   - slug: bot-bridge-cluster
     description: bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router 合并实现
