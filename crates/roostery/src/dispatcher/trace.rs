@@ -88,11 +88,17 @@ impl TraceContext {
 
     /// Derive a child context: same trace_id, depth+1, new parent_event_id.
     /// `max_depth` is preserved.
+    ///
+    /// `saturating_add` is a defense layer: a caller who forgets to call
+    /// `check_depth` between dispatches could otherwise overflow `u32`
+    /// after ~4B iterations, wrap depth to 0, and silently bypass the
+    /// depth gate forever. Saturating at `u32::MAX` keeps the gate
+    /// fail-closed (`u32::MAX > any sane max_depth`).
     pub fn child(&self, parent_event_id: Option<String>) -> Self {
         Self {
             trace_id: self.trace_id.clone(),
             parent_event_id,
-            depth: self.depth + 1,
+            depth: self.depth.saturating_add(1),
             max_depth: self.max_depth,
         }
     }
@@ -210,6 +216,19 @@ mod tests {
     }
 
     // --- S2 calculation tests -------------------------------------------------
+
+    #[test]
+    fn child_at_u32_max_saturates_not_wraps() {
+        // Defense-in-depth: a caller that forgets check_depth could chain
+        // child() calls indefinitely; without saturating_add the u32 depth
+        // would wrap to 0 after ~4B iterations and silently bypass the gate.
+        let mut ctx = TraceContext::new_root(None, 8);
+        ctx.depth = u32::MAX;
+        let child = ctx.child(None);
+        assert_eq!(child.depth, u32::MAX, "must saturate, not wrap");
+        // Gate still rejects.
+        assert!(child.check_depth().is_err());
+    }
 
     #[test]
     fn new_root_starts_at_depth_zero() {
