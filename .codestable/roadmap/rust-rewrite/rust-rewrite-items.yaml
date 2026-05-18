@@ -125,10 +125,10 @@ items:
   - slug: bot-stop-hook
     description: Stop hook 入口 + 反向调用 CLI；双 CLI surface 共享 bot::push 核心 lib fn；任意 agent / 脚本可推送到飞书
     depends_on: [bot-task-writer, dispatcher-loop, roostery-init]
-    status: in-progress
+    status: done
     feature: 2026-05-18-bot-stop-hook
     minimal_loop: true
-    notes: "Phase 5；🎯 最小闭环：完成后 CC headless 在飞书出 task；0.1.0 release 触发判据。Design 关键决策（user 拍板 2026-05-18）：(a) 双 CLI surface — roostery bot stop-hook（被动 hook stdin JSON）+ roostery bot push（反向调用 flag/stdin），共享同一 push lib fn；(b) Rust 红利显式发挥 — 类型化 PushRequest builder + PushOutcome 结构化输出 + --json stdout + --strict opt-in 真实 exit code + blake3 稳态 idempotency key + structured tracing；(c) receive_id 三层链 env ROOSTERY_NOTIFY_TO > identity::current > config.identity.user_id（不引入新字段）；(d) summary 抽取（CC transcript jsonl tail）在 Rust 层；agent_stop_notify.sh 退化为极简 wrapper；(e) 不调 dispatcher fire — push 与 dispatcher 两条独立顶层入口；(f) 主流程错误分类 LarkCallFailed 与其他都走 IM 兜底（--no-im-fallback opt-out）；(g) main.rs 仅顶层 dispatch — Bot args + run 放 bot_stop_hook::cli 模块（implement 跑通后可走 cs-decide 归档 convention）。新增 dep：blake3"
+    notes: "Phase 5 Module F 第 2 子 feature = **minimal-loop closing = 0.1.0 release 触发判据达成**。Accepted 2026-05-18（commit 220c7b0，CI run #26030808131 三 job 全绿，420 tests 全过）。**双 CLI surface 共享 bot_stop_hook::push 核心**：(1) roostery bot stop-hook（被动 hook stdin JSON，Rust 端原生 transcript jsonl tail）；(2) roostery bot push（反向调用 flag/stdin，让任意 agent / 脚本 / cron / CI 主动推飞书）。Design 关键决策（user 拍板 2026-05-18）：(a) Rust 红利显式发挥 — 类型化 PushRequest builder + PushOutcome 结构化 --json 输出（v1 稳定契约） + --strict opt-in 真实 exit code + blake3 稳态 idempotency key + structured tracing；(b) receive_id 三层链 env ROOSTERY_NOTIFY_TO > identity::current > config.identity.user_id（不引入 notify_receive_id 新字段）；(c) summary 抽取在 Rust 层；agent_stop_notify.sh 47行→10行极简 wrapper；(d) 不调 dispatcher fire — push 与 dispatcher 两条独立顶层入口；(e) 主流程错误分类 LarkCallFailed 与其他都走 IM 兜底（--no-im-fallback opt-out）；(f) main.rs 仅顶层 dispatch — Bot args + run 放 bot_stop_hook::cli 模块（建议沉淀 convention，待 cs-decide 归档）；(g) 附带 S10.5 修：4 mod ENV_LOCK 各自独立 Mutex 跨模块 race（race 在多 mod 同时改 ROOSTERY_HOME 时），统一切到 crate::paths::TEST_ENV_LOCK 共享锁，attention.md 同步修订规约。新增 dep：blake3。req agent-work-in-feishu 此刻升级 draft → current"
 
   - slug: bot-bridge-cluster
     description: bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router 合并实现

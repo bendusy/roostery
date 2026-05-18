@@ -470,12 +470,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
     - 主要支持的 req：**`agent-work-in-feishu`**（任务卡片这条主路径）
     - 备注：Phase 5 Module F 第 1 子 feature。3 pub async fn 纯库 API（`create_task` / `append_steps` / `get_or_create_for_session`）；session_cache JSON schema_version=1 持久化 `~/.roostery/state/session_tasks/`；host suffix 多机区分；safe_filename 路径跳出防御；`append_steps --yes` 架构红线显式破例已归档 ARCHITECTURE.md §6 第 18 条。**首次让 Rust 业务模块真消费 LarkRunner trait 做生产飞书 IO**（dispatcher 不走飞书；smoke / shim 走独立 I/O 路径）。0 新增 Cargo 依赖。顺手 fix：onboarding shell_kind_detect_* 4 测试加 ENV_LOCK 串行化（attention.md 规约）。Accepted 2026-05-18（commit `083b8ba`，CI run #26021247942 全绿）
 
-16. **`bot-stop-hook`** — Stop hook 入口：替代 Python shell→python bridge，原生处理 stdin JSON event，task_writer 主路径 + IM 兜底
+16. **`bot-stop-hook`** — Stop hook 入口 + 反向调用 CLI；双 CLI surface 共享 bot::push 核心 lib fn
     - 所属模块：F
     - 依赖：`bot-task-writer`、`dispatcher-loop`、`roostery-init`
-    - 状态：planned
-    - 主要支持的 req：**`agent-work-in-feishu`**（E2E 闭环点）
-    - 备注：Phase 5；**🎯 minimal_loop = true**——完成后真跑一次 CC headless 会话能在飞书 app 看到新任务 + step。0.1.0 release 触发判据
+    - 状态：**done**（feature `2026-05-18-bot-stop-hook`）
+    - 主要支持的 req：**`agent-work-in-feishu`** ⭐（升级 draft → current 触发点；E2E 闭环 + 反向调用双维兑现）
+    - 备注：Phase 5 Module F 第 2 子 feature = **minimal-loop closing = 🎯 0.1.0 release 触发判据达成**。**双 CLI surface**：(1) `roostery bot stop-hook`（被动 hook，Rust 端原生 stdin JSON + transcript jsonl tail，替代 Python shell→python bridge）；(2) `roostery bot push`（反向调用，让任意 agent / 脚本 / cron / CI 主动推飞书，`--agent / --session / --summary | --summary-stdin / --description / --assignee-open-id / --strict / --json / --no-im-fallback`）。共享 `bot_stop_hook::push` 核心 lib fn。**Rust 红利显式发挥**：类型化 `PushRequest` builder + `PushOutcome` 结构化 `--json` 输出（v1 稳定契约）+ `--strict` opt-in 真实 exit code + blake3 稳态 idempotency key（修 SipHash 启动种子随机化 bug）+ structured tracing。receive_id 三层链 `env ROOSTERY_NOTIFY_TO > identity::current > config.identity.user_id`（不引入新字段）；task_writer 失败走 IM 兜底（`--no-im-fallback` opt-out）；不调 dispatcher fire（与 dispatcher 双独立顶层入口）；`templates/agent_stop_notify.sh` 47 行 → 10 行极简 wrapper。**S10.5 顺手修**：4 mod 各自 ENV_LOCK 跨模块 race（多 mod 改 ROOSTERY_HOME 时 race）→ 统一切 `crate::paths::TEST_ENV_LOCK` 共享锁，attention.md 修订规约。新增 dep：`blake3 = "1"`。Accepted 2026-05-18（commit `220c7b0`，CI run #26030808131 三 job 全绿，420 tests 全过）
 
 17. **`bot-bridge-cluster`** — bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router 合并实现
     - 所属模块：F
@@ -518,7 +518,7 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
     - 主要支持的 req：—（项目维护）
     - 备注：Phase 7；这一条对应 brainstorm 的"README 改写"显式任务 + 项目终态切换
 
-**最小闭环**：第 16 条 `bot-stop-hook` 做完后 CC headless 会话能在飞书 app 看到新任务 + 1 条 step。这一刻 = "Rust 可用"判据成立 = 0.1.0 release 触发点（参 brainstorm v0.x-direction "首个 release"决议）。后续条目（17 / 18 / 19 / 20 / 21）是 0.1.0 之后到 1.0 之间的扩展。
+**最小闭环 ✅ 达成**：第 16 条 `bot-stop-hook` **2026-05-18 落地**（commit `220c7b0`，CI run #26030808131 全绿）→ CC headless 会话能在飞书 app 看到新任务 + step，**且**任意 agent / 脚本可通过 `roostery bot push` 主动推送。这一刻 = "Rust 可用"判据成立 = **0.1.0 release 触发点达成**（参 brainstorm v0.x-direction "首个 release"决议）。下一步：(a) 真机 dogfood（roostery init + CC + 手机飞书看 task）；(b) 0.1.0 release 准备（README / CHANGELOG / crates.io）。后续条目（17 / 18 / 19 / 20 / 21）是 0.1.0 之后到 1.0 之间的扩展。
 
 ## 6. 排期思路
 
@@ -528,7 +528,7 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 - **Phase 2（C）**：lark-cli wrapper + smoke + shim。引入 async / subprocess / trait 抽象。**第一个能跑通"飞书端到端往返"的 milestone**（虽然不是 user-facing 价值）
 - **Phase 3（D）**：onboarding 入口。引入路径处理 / YAML / JSON merge / 嵌入资源。**第一个 user-facing 装机 milestone**——陌生开发者能跑 `roostery init` 装好 hook 和 shim（虽然还不能出 task）
 - **Phase 4（E）**：dispatcher。引入复杂 trait + enum + 状态机 + 超时。**最难一段**：Python 版 dispatcher 测试覆盖最厚，行为 corner case 多
-- **Phase 5（F）**：bot bridge。**关键 milestone**——`bot-stop-hook` 完成 = 最小闭环 = "Rust 可用" = 0.1.0 触发
+- **Phase 5（F）**：bot bridge。**关键 milestone ✅**——`bot-stop-hook` 完成 = 最小闭环 = "Rust 可用" = **0.1.0 触发点达成（2026-05-18）**；第 3 子 feature `bot-bridge-cluster` 是 0.1.0 之后的扩展
 - **Phase 6（G）**：reporting。0.1.0 后扩展，引入 Cargo feature flag + reqwest 边界控制
 - **Phase 7（H + cleanup）**：Base + 终态切换
 

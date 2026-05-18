@@ -2,7 +2,7 @@
 
 > 状态：active（Rust 重写期更新）
 > 创建日期：2026-05-15
-> 末次刷新：2026-05-15（rust-scaffold feature 落地时）
+> 末次刷新：2026-05-18（bot-stop-hook feature accept；0.1.0 触发判据达成）
 
 ## 1. 项目简介
 
@@ -75,6 +75,10 @@
 | `CreateTaskOptions` / `AppendStepsOptions` | `bot_task_writer.rs`。可选参数集合 `#[non_exhaustive]` + `Default` + lifetime borrow + `new() / with_*` builder API（attention.md E0639 规约要求 builder，不允许 struct literal）。`CreateTaskOptions` 5 字段（`description / assignee_open_id / idempotency_key / host / profile`）；`AppendStepsOptions` 2 字段（`idempotency_key / profile`）|
 | `SESSION_CACHE_SCHEMA_VERSION` | `bot_task_writer.rs:22` 公开 const `= 1`。`~/.roostery/state/session_tasks/{safe}.json` schema 字段名 / 类型 / 序列化形态变更需 bump version + `cs-roadmap update` 评估 + 旧版兼容反序列化。schema_version 缺失走 serde default（0）= 兼容旧版 cache 读 |
 | `DEFAULT_HOST_FALLBACK` | `bot_task_writer.rs:23` 公开 const `= "unknown"`。host suffix 三 fallback 链终态（`ROOSTERY_HOST` env > hostname 首段 > 本兜底）|
+| `PushRequest` / `PushOutcome` / `PushStatus` / `PushOptions` | Phase 5 落地的 `crates/roostery/src/bot_stop_hook.rs`（feature `2026-05-18-bot-stop-hook`）。`PushRequest` builder API（`new(agent, session, cwd) + with_summary / with_description / with_assignee`）是双 CLI surface（`bot stop-hook` + `bot push`）共享的类型化边界。`PushOutcome` `#[derive(Serialize)]` 是 `--json` 模式下 caller 可 jq 消费的**稳定契约**（v1 字段不破坏性变更；新字段走 backwards-compatible append）。`PushStatus` 4 变体 `#[serde(rename_all = "snake_case")]`：`Success` / `FallbackUsed` / `Failed` / `Skipped`。`PushOptions { strict, json_output, no_im_fallback }` 3 bool，Default = hook 路径推荐（不 strict / 不 json / 走 IM 兜底）|
+| `StopHookInput` | `bot_stop_hook.rs` `#[serde(default)]` 全字段 Option 的 CC/Codex/Gemini SessionEnd stdin JSON schema。空 stdin / 缺字段 / 非法 JSON 都不报错（fallback 到 default + 走 Skipped）|
+| `DEFAULT_SUMMARY` / `SUMMARY_MAX_BYTES` | `bot_stop_hook.rs:21-24` 公开 const `"Agent stopped (no summary)"` / `200`。append_steps 文本默认值 + UTF-8 边界安全截断（`floor_char_boundary` polyfill）|
+| `paths::TEST_ENV_LOCK` | `crates/roostery/src/paths.rs:67` `pub static Mutex<()>`。**跨模块共享**的测试 env 串行化锁。所有 `#[test]` / `#[tokio::test]` 改 `ROOSTERY_*` / `HOSTNAME` / `FEISHU_*` 等进程级 env 必须先 lock 这把。修订原因：之前每 mod 在 `mod tests` 各自声明 ENV_LOCK，多 mod 并行跑触碰同 env var 时 race（一 mod lock 不能阻挡另一 mod set_var），任 test 因 race 失败 panic 还 poison 该 mod lock 连锁拖挂。**Corollary**：`fn` 内消费 `paths::roostery_home()` / `paths::journal_dir()` 等 env-dependent helper 的测试（如 config roundtrip）也要锁——`Config::default()` 里 `journal.dir = paths::journal_dir()` 会读 env 当前值。落定于 bot-stop-hook feature S10.5 |
 | `SAFE_ENV_FORWARD` | `runners.rs:36` 公开 `&[&'static str]` const allowlist。子进程 env 经此过滤——父 hook 状态（如 `ROOSTERY_AGENT`）**不串到子 agent**避 trace 链断裂。覆盖：POSIX baseline（USER/LOGNAME/SHELL/TMPDIR）+ XDG_* + 代理（HTTP_PROXY etc.）+ TLS CA + API keys（ANTHROPIC/OPENAI/GEMINI/GOOGLE）+ Custom base URLs + 各 vendor config dirs。私有 helper `prep_env(ctx, kind)` 合并 allowlist + POSIX 兜底（PATH/HOME/LANG/TERM）+ trace 三 env（`to_env_pairs()`）|
 | `DEFAULT_TIMEOUT_MS` / `STDOUT_HEAD_CAP` | `runners.rs:30-31` 公开 const，分别 `600_000` (10 min) / `4096` (4 KiB)。CcHeadless 默认 timeout + stdout/stderr 截断阈值 |
 
@@ -266,8 +270,8 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 - caller 编排预期（dispatcher-loop 后续 feature 拼）：`HookEvent in → rules.matches → trace.check_depth → runaway.check → budget.check_or_raise → runner.run(args) → budget.consume + save`。本 feature 提供 `matches` 入口；剩余 chain 由 dispatcher-loop 接
 
 ### Module F · Bot Bridge（Phase 5）
-agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feishu` req 的直接兑现层**。`bot-stop-hook` feature 完成 = "Rust 可用" milestone = 0.1.0 触发判据。
-- 子 feature：**`bot-task-writer`（done）** / `bot-stop-hook` / `bot-bridge-cluster`
+agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feishu` req 的直接兑现层**。`bot-stop-hook` feature 完成 = "Rust 可用" milestone = **0.1.0 触发判据达成**（2026-05-18，feature `2026-05-18-bot-stop-hook` 合入 commit `220c7b0`，CI run `26030808131` 全绿）。
+- 子 feature：**`bot-task-writer`（done）** / **`bot-stop-hook`（done）** / `bot-bridge-cluster`
 
 **bot_task_writer 模块**（已落地，feature `2026-05-18-bot-task-writer`，Phase 5 第 1 子 feature）：
 
@@ -283,6 +287,25 @@ agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feis
   - **session_cache JSON v1** 持久化在 `~/.roostery/state/session_tasks/{safe}.json`；atomic `.tmp` + rename；schema_version 缺失向后兼容 read；safe_filename 防路径跳出（连续 `..` → `__`）
   - **部分失败语义**：`create_task` OK + `append_steps` Err → 本模块 fn 不耦合 caller 编排；caller 自决；下次 `get_or_create_for_session` 自然走 cache 重试 append
 - caller 编排预期（Phase 5 第 2 子 feature `bot-stop-hook` 拼）：stop hook sh 喂 stdin JSON → `bot_stop_hook` 读 → 调 `get_or_create_for_session` + `append_steps` 把 agent 工作过程串成飞书 task
+
+**bot_stop_hook 模块**（已落地，feature `2026-05-18-bot-stop-hook`，Phase 5 第 2 子 feature = **minimal-loop closing / 0.1.0 触发判据**）：
+
+- **双 CLI surface 共享单一核心 lib fn `push`**：
+  - `roostery bot stop-hook` — **被动 hook 入口**：从 stdin 读 CC/Codex/Gemini SessionEnd JSON（schema = `StopHookInput`），Rust 端原生 tail transcript jsonl 抽最后一条 assistant text 作 summary（替代 Python 期 sh+jq 抽字段链）
+  - `roostery bot push` — **反向调用入口**：让任意 agent / 脚本 / cron / CI 通过 flag-based CLI 主动推送进度到飞书。flag = `--agent --session --cwd --summary | --summary-stdin --description --assignee-open-id --strict --json --no-im-fallback`。这是 `agent-work-in-feishu` req 的**第二维兑现**——不只 stop hook 被动触发，任何 agent 都能脚本化把工作推进度推到飞书
+- 新文件 `crates/roostery/src/bot_stop_hook.rs`（产品 ~600 行 + 内联测 ~450 行）；`lib.rs` 加 1 pub mod；新测试文件 `tests/bot_cli_integration.rs` 4 binary-level e2e；**1 新增 Cargo 依赖 `blake3 = "1"`**（跨进程稳态 idempotency key 短哈希，修 `std::hash::DefaultHasher` SipHash 启动种子随机化在 lark-cli `--idempotency-key` 链路里的幂等失效 bug）
+- 公开 API（核心 lib + cli 适配）：
+  - `bot_stop_hook::push(req: PushRequest, runner, opts) -> PushOutcome` — 共享业务编排
+  - `bot_stop_hook::run_stop_hook(runner, opts) -> PushOutcome` — stop-hook CLI 适配（stdin 解析 + transcript tail）
+  - `bot_stop_hook::cli::{BotArgs, BotSub::{StopHook, Push}, PushCliArgs, StopHookCliArgs}` + `cli::run(args) -> ExitCode` — clap 入口；main.rs 仅一行 dispatch（**设计 2.5 convention 提议**：未来子命令的 args / run 都放对应模块的 `pub mod cli`，main.rs 只做顶层 enum + match）
+- 关键行为（user 拍板）：
+  - **receive_id 三层链** = `env ROOSTERY_NOTIFY_TO > identity::current(runner).user_open_id > config.identity.user_id`；三层全空 → `PushStatus::Skipped` 静默 exit 0（不调 lark-cli）。**不引入 config.identity.notify_receive_id 新字段**——复用 `user_id`
+  - **task_writer 失败 → IM 兜底** (`lark-cli im +messages-send`)：除 `--no-im-fallback` opt-out 外，所有非 Ok 都走 IM；IM 也失败 → `PushStatus::Failed` + 累积 `errors`
+  - **默认 exit 0**（hook 路径不阻塞 agent runtime）；`--strict` opt-in 真实 exit code（仅 `Failed` 时 exit 1，`Skipped` 不算错）
+  - **`--json` 结构化 stdout**：`PushOutcome` 序列化（v1 稳定契约，新字段 backwards-compatible append）让 CI / cron / 脚本 caller 可 jq 取 task_url / fallback_used
+  - **summary 截断 UTF-8 边界安全**：`truncate_utf8` 用 `is_char_boundary` 不切坏多字节字符（Python `head -c 200` 在中文 / emoji 上会切坏）
+- **极简 sh wrapper 切换**（`templates/agent_stop_notify.sh` 47 行 → 10 行 + 0 jq/tac）：从"sh 用 jq 抽 cwd / session / transcript / tail + 调 `roostery dispatcher fire`"退化为"stdin 直透 `roostery bot stop-hook`"，Rust 端原生处理。旧用户重跑 `roostery init` 自然升级（include_str! 编译期嵌入 + hooks_merge 幂等覆盖）
+- **与 dispatcher 的关系**：bot_stop_hook 与 dispatcher 是**两个独立顶层 CLI 入口**，不互调（架构红线 D14）。dispatcher 是通用 rule 引擎（HookEvent / budget / trace），bot push/stop-hook 是飞书 task 快通道（PushRequest / IM 兜底）。未来若需统一可新开 feature 加 `BotPushRunner` 适配器，不阻塞 0.1.0
 
 ### Module G · Reporting（Phase 6）
 日报：git log 聚合 + LLM 摘要 + 写飞书 docx + Base 记录。`llm_summary` 是**唯一**允许 import 外部 LLM client 的模块（架构红线）。Cargo feature flag 控制。
