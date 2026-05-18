@@ -47,6 +47,13 @@ impl Bucket {
 
     /// Returns `Some(reason)` when consuming `calls` / `cost_usd` more
     /// would exceed a cap; `None` when it fits.
+    ///
+    /// Defense-in-depth against non-finite state: NaN propagates through
+    /// arithmetic but all comparisons against NaN return false, so the
+    /// naive `total > max` check would fail-open if `self.cost_usd` ever
+    /// became NaN (e.g. corrupted on-disk state, hand-edited budget.json).
+    /// Explicit non-finite checks below short-circuit to "exceeded" so the
+    /// caller can fail-closed and let the operator investigate.
     pub fn would_exceed(&self, calls: u32, cost_usd: f64) -> Option<String> {
         if self.calls.saturating_add(calls) > self.max_calls {
             return Some(format!(
@@ -55,10 +62,16 @@ impl Bucket {
                 self.max_calls
             ));
         }
-        if self.cost_usd + cost_usd > self.max_cost_usd {
+        if !self.cost_usd.is_finite() || !cost_usd.is_finite() {
             return Some(format!(
-                "cost_usd {:.6} > max_cost_usd {:.6}",
-                self.cost_usd + cost_usd,
+                "cost_usd non-finite (self={}, incoming={}); refuse to admit",
+                self.cost_usd, cost_usd
+            ));
+        }
+        let total = self.cost_usd + cost_usd;
+        if total > self.max_cost_usd {
+            return Some(format!(
+                "cost_usd {total:.6} > max_cost_usd {:.6}",
                 self.max_cost_usd
             ));
         }
@@ -339,6 +352,35 @@ mod tests {
     #[test]
     fn schema_version_const_is_one() {
         assert_eq!(BUDGET_SCHEMA_VERSION, 1);
+    }
+
+    // --- non-finite defense ----------------------------------------------
+
+    #[test]
+    fn would_exceed_fails_closed_on_nan_self_cost_usd() {
+        let mut b = Bucket::from_cfg(&small_cfg());
+        b.cost_usd = f64::NAN;
+        let reason = b
+            .would_exceed(1, 0.0)
+            .expect("NaN self.cost_usd must short-circuit to exceeded");
+        assert!(reason.contains("non-finite"), "got: {reason}");
+    }
+
+    #[test]
+    fn would_exceed_fails_closed_on_nan_incoming_cost_usd() {
+        let b = Bucket::from_cfg(&small_cfg());
+        let reason = b
+            .would_exceed(1, f64::NAN)
+            .expect("NaN incoming cost_usd must short-circuit to exceeded");
+        assert!(reason.contains("non-finite"), "got: {reason}");
+    }
+
+    #[test]
+    fn would_exceed_fails_closed_on_infinity_self() {
+        let mut b = Bucket::from_cfg(&small_cfg());
+        b.cost_usd = f64::INFINITY;
+        let reason = b.would_exceed(1, 0.0).expect("Inf must short-circuit");
+        assert!(reason.contains("non-finite"), "got: {reason}");
     }
 
     // --- codex round-4 P1: BudgetGuard 跨进程 RMW serialization ------------
