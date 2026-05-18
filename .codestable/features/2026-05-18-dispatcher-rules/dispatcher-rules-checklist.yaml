@@ -1,0 +1,168 @@
+feature: 2026-05-18-dispatcher-rules
+created: 2026-05-18
+
+steps:
+  - action: "S1 HookEvent 名词层：新建 src/hook_event.rs 含 HookEvent #[non_exhaustive] 6 字段（schema_version/hook_source/session_id/workspace/trigger_meta/trace）+ HOOK_EVENT_SCHEMA_VERSION=1 const + trigger_meta_path(&str) -> Option<&Value> fn"
+    exit_signal: "cargo build 成功；HookEvent serde round-trip 单测；HOOK_EVENT_SCHEMA_VERSION const 单测；trigger_meta_path 命中 / 缺路径 / 非 object 中断 3 单测"
+    status: pending
+
+  - action: "S2 rules 类型骨架：新建 src/rules.rs 含 RuleName(String) #[serde(transparent)] newtype + RawRule / RuleWhen / RuleAction / CompiledRule / Match<'a> 类型；RulesError #[non_exhaustive] 5 变体（LoadFailed/ParseFailed/SchemaVersionMismatch/DuplicateRuleName/InvalidGlob）；fn 签名 todo!()；RULES_SCHEMA_VERSION=1 const + SELF_EVENT_PREFIXES &[&'static str] const"
+    exit_signal: "cargo build 成功；RuleName transparent serde 单测；RulesError display 单测；const 暴露单测"
+    status: pending
+
+  - action: "S3 YAML load + compile：load / load_from 实装走 serde_yml 反序列化 RulesConfig；校验 schema_version == 1；重名 grep；逐条 compile_rule 把 workspace_glob 字符串编译为 globset::GlobMatcher；paths.rs 加 rules_path()；Cargo.toml 加 globset 0.4"
+    exit_signal: "load 6 单测：文件缺失 Ok(vec![]) / yaml 非法 ParseFailed / schema_version=2 SchemaVersionMismatch / 重名 DuplicateRuleName / 非法 glob InvalidGlob / 2 规则 happy 编译完成"
+    status: pending
+
+  - action: "S4 matches 实装：self-event 短路（hook_source starts_with SELF_EVENT_PREFIXES）+ 遍历 CompiledRule 逐条 AND 维度判定（hook_source eq / workspace glob.is_match / trigger_meta_eq 所有 key 路径 eq）+ first-match-wins 返 Option<Match<'a>>"
+    exit_signal: "matches 11 单测：空规则集 None / self-event dispatcher 短路 / self-event roostery 短路 / hook_source 命中 / hook_source 不命中跳过 / workspace_glob ** 通配命中 / trigger_meta_eq 命中 / trigger_meta path 缺失不命中 / AND 全过 / AND 部分过失败 / first-match-wins 仅返第一"
+    status: pending
+
+  - action: "S5 模块挂载 + 集成测试：lib.rs 加 pub mod hook_event / rules；新建 tests/rules_integration.rs 串场景（rules.yaml 真磁盘 load → matches real HookEvent → assert Match.runner/args）"
+    exit_signal: "lib.rs 2 mod 暴露；集成测试 3+ 全绿；既有 testsuite 无回归"
+    status: pending
+
+  - action: "S6 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；N1-N10 + as_object_mut.unwrap 守护 grep 0 命中；推 CI 验三 job"
+    exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表全 0 命中"
+    status: pending
+
+checks:
+  - item: "src/hook_event.rs 存在；HookEvent #[non_exhaustive] 6 字段（schema_version/hook_source/session_id/workspace/trigger_meta/trace）"
+    source: 名词契约
+    status: open
+
+  - item: "HOOK_EVENT_SCHEMA_VERSION pub const = 1"
+    source: 名词契约
+    status: open
+
+  - item: "HookEvent::trigger_meta_path(&str) -> Option<&Value> 点路径取值"
+    source: 名词契约
+    status: open
+
+  - item: "src/rules.rs 存在；RuleName(String) #[serde(transparent)] newtype；RawRule / RuleWhen / RuleAction / CompiledRule / Match<'a> 全 declared"
+    source: 名词契约
+    status: open
+
+  - item: "RulesError #[non_exhaustive] 5 变体（LoadFailed/ParseFailed/SchemaVersionMismatch/DuplicateRuleName/InvalidGlob）"
+    source: 名词契约
+    status: open
+
+  - item: "RULES_SCHEMA_VERSION = 1 const + SELF_EVENT_PREFIXES = &[\"dispatcher.\", \"roostery.\"] const"
+    source: 名词契约
+    status: open
+
+  - item: "rules 公开 fn load / load_from / matches"
+    source: 名词契约
+    status: open
+
+  - item: "paths::rules_path() 加到 paths.rs"
+    source: 名词契约
+    status: open
+
+  - item: "lib.rs 顶层 pub mod hook_event; pub mod rules; 两 mod 暴露"
+    source: 挂载点
+    status: open
+
+  - item: "Cargo.toml 加 globset 0.4；无 reqwest / HTTP / 外部 LLM client"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 1：load 缺文件 → Ok(vec![])（first-run 友好）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 2：compile 一次性（matches 阶段不再走字符串 glob）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 3：first-match-wins（matches 返 Option<Match>，不评估剩余规则）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 4：self-event 短路（hook_source starts_with SELF_EVENT_PREFIXES）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 5：AND 多维度（when 中所有非 None / 非空字段必须满足）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 6：CompiledRule 不可变（matches 只读引用）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 7：RULES_SCHEMA_VERSION=1 公开承诺（bump 需 cs-roadmap update + 旧版兼容）"
+    source: 流程级约束
+    status: open
+
+  - item: "idiom #1 强类型：所有类型 struct/enum；唯一 Value 在 RuleAction.args 和 HookEvent.trigger_meta（契约要求 opaque）"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #2 error 颗粒度：RulesError 5 变体 #[non_exhaustive] 细分"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #3 newtype：RuleName(String) #[serde(transparent)]（business-identifier-newtype decision 一致）"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #4 typestate：RawRule（YAML 态）→ CompiledRule（含 GlobMatcher 态）二态分离"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #5 零拷贝：Match<'a> 借用 rules / event；matches 不 clone 数据"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #6 编译期：RULES_SCHEMA_VERSION const + SELF_EVENT_PREFIXES &[&'static str] const"
+    source: idiom checklist
+    status: open
+
+  - item: "守护 grep N1：grep -E 'render|template_render|\\{\\{|handlebars|tinytemplate' src/{rules,hook_event}.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N2：grep -E 'Runner|runner_registry' src/{rules,hook_event}.rs → 仅作为 RuleAction.runner 字段名"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N3：grep -E 'BudgetState|RunawayTracker' src/{rules,hook_event}.rs → 0；TraceContext 仅 HookEvent.trace 字段（§4.4）"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N4：grep -E '\"continue\"|\\.cont\\b' src/rules.rs → 0 命中（不实装 continue 链）"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N5：grep -E 'switch_by_field|branches' src/rules.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N6：grep -E 'budget_override|result_writeback' src/rules.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N7：grep 'FEISHU_HUB_' src/{rules,hook_event}.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N8：grep 'Command::Rules' src/main.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N9：grep -E 'LarkRunner|lark_cli::' src/{rules,hook_event}.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N10：grep -E 'disabled|priority' src/rules.rs → 0 命中（除测试 fixture）"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep rust-idiom-first：grep -rE 'as_object_mut\\(\\)\\.unwrap\\(\\)|as_array_mut\\(\\)\\.unwrap\\(\\)' src/{rules,hook_event}.rs → 0 命中"
+    source: idiom checklist
+    status: open
+
+  - item: "CI 三 job（fmt / clippy / test）远端全绿"
+    source: 模块级
+    status: open
