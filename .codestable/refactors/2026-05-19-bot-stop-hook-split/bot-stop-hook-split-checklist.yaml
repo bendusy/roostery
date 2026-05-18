@@ -1,0 +1,50 @@
+refactor: 2026-05-19-bot-stop-hook-split
+source_design: bot-stop-hook-split-refactor-design.md
+generated_at: 2026-05-19
+
+steps:
+  - id: S1
+    method: M-L3-Split
+    action: 创建 bot_stop_hook/ 目录 + mod.rs 骨架 + 5 个子文件占位（types/util/stop_input/push/cli）；不切 lib.rs；旧 bot_stop_hook.rs 不动
+    exit_signal: cargo build 仍绿；新文件未参与编译（lib.rs 未指向新 mod.rs）
+    verification: AI
+    status: pending
+
+  - id: S2
+    method: M-L3-Split
+    action: |
+      分块搬运并切换 lib.rs：
+        - types.rs ← PushRequest / PushOptions / PushOutcome / PushStatus
+        - util.rs ← truncate_utf8 / cwd_basename / stable_idem_key / resolve_receive_id / 常量 / transcript_reader 子模块
+        - stop_input.rs ← StopHookInput + resolve_summary_from_hook_input
+        - push.rs ← push / finish_with_fallback / run_stop_hook / parse_stop_hook_input / build_request_from_stop_hook_input
+        - cli.rs ← pub mod cli 全部内容（提到 module 顶层）
+        - 各 #[cfg(test)] mod tests 随业务下沉
+        - mod.rs pub use re-export 保住公开 API
+        - 删 bot_stop_hook.rs 原文件
+    exit_signal: |
+      cargo build 绿；cargo clippy --all-targets --all-features -- -D warnings 0 警告；
+      cargo test --all 全绿 436+ tests；grep 公开 API 仍命中
+    verification: AI
+    status: pending
+
+  - id: S3
+    method: M-L2-Mechanical
+    action: cargo fmt --all + 四绿核对 + grep 反向核对（旧文件不存在 / 公开 API 引用未改 / 各子文件 < 500 行）
+    exit_signal: fmt-check + clippy + test-all + test-doc 四绿；grep 反向核对全 pass
+    verification: AI
+    status: pending
+
+checks:
+  api_preservation:
+    - main_rs_unchanged: main.rs:38,139 引用 bot_stop_hook::cli::BotArgs / run 未改
+    - integration_tests_pass: tests/bot_cli_integration.rs 4 e2e 通过
+    - public_pub_use_complete: bot_stop_hook::push / run_stop_hook / cli::run 等全部仍可访问
+  file_layout:
+    - dir_exists: crates/roostery/src/bot_stop_hook/ 含 6 文件
+    - original_removed: crates/roostery/src/bot_stop_hook.rs 不存在
+    - file_size_bounds: 各子文件 < 500 行
+  behavior_equivalence:
+    - cargo_test_all: 436+ tests 通过数不变
+    - clippy_clean: 0 warnings
+    - fmt_clean: cargo fmt --check 通过

@@ -231,9 +231,7 @@ async fn process_one(
             Some(matched_rule_name),
             Some(runner_kind),
             StepStatus::GateRejected {
-                reason: format!(
-                    "runaway: {count} fires in {window_secs}s (threshold {threshold})"
-                ),
+                reason: format!("runaway: {count} fires in {window_secs}s (threshold {threshold})"),
             },
         );
     }
