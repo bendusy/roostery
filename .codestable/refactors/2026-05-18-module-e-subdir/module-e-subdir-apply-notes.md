@@ -79,8 +79,8 @@ refactor: 2026-05-18-module-e-subdir
 
 ## 步骤 8：commit + 推 CI
 
-- commit message: `refactor(module-e-subdir): Module E 7 modules → src/dispatcher/`
-- CI run：待推后填回
+- commit: `d2d7d75` "refactor(module-e-subdir): Module E 7 modules → src/dispatcher/"
+- CI run: #26019292413 三 job 全绿（2026-05-18T07:20Z 推送，~1min 完成）
 
 ## 行为等价自检
 
