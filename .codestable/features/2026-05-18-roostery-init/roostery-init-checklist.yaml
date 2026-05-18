@@ -1,0 +1,168 @@
+feature: 2026-05-18-roostery-init
+created: 2026-05-18
+
+steps:
+  - action: "S1 hooks_merge 扩 Gemini：AgentKind 加 Gemini 变体；新增 GEMINI_STOP_HOOK_JSON const + templates/gemini_stop_hook.json（SessionEnd 格式，env=ROOSTERY_AGENT=gemini）；同步 template() / as_str() / Display / FromStr arm；UnknownAgentKind 错误信息更新到 cc/codex/gemini"
+    exit_signal: "hooks_merge 既有测试全绿；新增 gemini_template_nonempty + agentkind_gemini_roundtrip + agentkind_unknown_error_msg 三单测；apply_template 用 GEMINI_STOP_HOOK_JSON 写到 tempdir 通过"
+    status: pending
+
+  - action: "S2 名词层基底骨架：lib.rs 加 pub mod identity / agent_detect / onboarding；新建三 .rs 文件含 Error enum #[non_exhaustive] + struct/enum 字段 + fn 签名 todo!()；paths.rs 加 scripts_dir() / env_file() 两 fn；Cargo.toml 加 which='6' + gethostname='0.4' + thiserror（如已有则不重复）"
+    exit_signal: "cargo build 成功；各模块至少 1 个 trivial 单测（Error display / Default 行为）；既有 testsuite 无回归"
+    status: pending
+
+  - action: "S3 identity 计算节点：实现 current(runner) async；解析 auth status JSON 字段 userOpenId/userName/appId/brand/tokenStatus；解析 profile list 取 active 名；hostname 走 gethostname crate；4 个 accessor + short_user + short_bot + is_ready + describe 完整实现"
+    exit_signal: "identity 5+ 单测（MockLarkRunner happy / auth token expired / auth error / profile list 空 / auth JSON 缺字段）全绿"
+    status: pending
+
+  - action: "S4 agent_detect 计算节点：AGENTS const slice 3 项（cc/codex/gemini）；detect_all(skip) 用 which::which() 探可执行路径；expanded_hooks_target() 用 dirs::home_dir() 展开 ~"
+    exit_signal: "agent_detect 3+ 单测（全装 / skip 一项 / PATH 空全 false）全绿；不 panic"
+    status: pending
+
+  - action: "S5 onboarding 编排骨架：OnboardingError enum 全变体；InitOptions/InitReport/SkipReason/ShellKind 完整定义；ShellKind::detect_from_env + rc_path 实装；run(runner, opts) 主路径串起 5 个私有 fn 但每个先桩实现（返回 Ok 但不写盘）"
+    exit_signal: "skeleton 编译通过；dry_run=true 单测验证零文件副作用；ShellKind 4 单测（zsh / bash / fish→err / 未设→err）"
+    status: pending
+
+  - action: "S6 onboarding 持久化层实装：install_shim（current_exe sibling + hash 比对 sha2 + 0755 chmod）/ write_sh_bridge / write_env_file（含 export ROOSTERY_REAL_LARK_CLI=resolved-path）/ patch_shell_rc（marker block # >>> roostery >>> / # <<< roostery <<< 包裹幂等）；smoke::ensure_ready() 守门 + 失败即返"
+    exit_signal: "shim install 4 单测（target 不存在 / 同 hash 跳 / 不同 hash 覆盖 / 非 shim 冲突报错 / source 缺失报错）+ rc patch 5 单测（zsh happy / bash happy / 已有 marker 跳 / fish 报错 / rc 不存在创建）+ env_file 幂等单测"
+    status: pending
+
+  - action: "S7 onboarding hook 编排：merge_hooks_for 遍历 detect 结果 + skip_agents，逐 agent 调 hooks_merge::apply_template；单 agent 失败不阻塞，errors 汇总到 InitReport；末尾若任一失败整体 exit 1"
+    exit_signal: "集成测试 tests/onboarding_integration.rs：tempdir HOME + MockLarkRunner + fake PATH 三 agent 全装跑通；二次跑幂等；--skip-agent codex 跳过 codex 验证；某 agent target 是无效 JSON 时其他 agent 仍装且 InitReport.errors 非空"
+    status: pending
+
+  - action: "S8 main.rs 接线：Command::Init(InitArgs)；InitArgs 含 --dry-run + --skip-agent <AGENT>（可重复）；解析 String → AgentKind 走 FromStr；handler 起 tokio::runtime::Builder::new_current_thread() 跑 onboarding::run；format_report 打印多行 summary（identity describe / 装了哪些 agent / shim 路径 / rc 改了哪个 / next-step 提示）"
+    exit_signal: "cargo run -- init --dry-run（fake HOME via ROOSTERY_HOME env）跑通 exit 0 + 无副作用；roostery init --help 文本含 --dry-run / --skip-agent"
+    status: pending
+
+  - action: "S9 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；rust-idiom-first 守护 grep（as_object_mut.unwrap / FEISHU_HUB_ / cargo install / fish / uninstall）逐条 0 命中；推 CI 验三 job"
+    exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表 5 条全 0 命中"
+    status: pending
+
+checks:
+  - item: "src/identity.rs 存在；Identity #[non_exhaustive] struct 字段全 private + accessor 暴露；7 字段（profile_name / user_open_id / user_name / bot_app_id / brand / token_status / host）"
+    source: 名词契约
+    status: open
+
+  - item: "src/agent_detect.rs 存在；AGENTS &'static [AgentSpec] 含 3 项（kind=Cc/Codex/Gemini）；AgentSpec 用 &'static str 字段"
+    source: 名词契约
+    status: open
+
+  - item: "src/onboarding.rs 存在；OnboardingError #[non_exhaustive] thiserror ≥7 变体（SmokeNotReady #[from] / StateDirFailed / ShimSourceMissing / ShimTargetConflict / ShimCopyFailed / WriteFailed / HookMergeFailed / UnsupportedShell）"
+    source: 名词契约
+    status: open
+
+  - item: "ShellKind #[non_exhaustive] enum { Zsh, Bash } + rc_path + detect_from_env"
+    source: 名词契约
+    status: open
+
+  - item: "src/hooks_merge.rs AgentKind 含 Gemini 变体 + template() Gemini arm + GEMINI_STOP_HOOK_JSON pub const + templates/gemini_stop_hook.json 非空"
+    source: 名词契约
+    status: open
+
+  - item: "src/paths.rs 加 scripts_dir() + env_file() 公开 fn"
+    source: 名词契约
+    status: open
+
+  - item: "main.rs Command::Init(InitArgs) + InitArgs 字段 dry_run + skip_agents Vec<String>"
+    source: 名词契约
+    status: open
+
+  - item: "lib.rs 顶层 pub mod identity; pub mod agent_detect; pub mod onboarding; 三 mod 暴露"
+    source: 挂载点
+    status: open
+
+  - item: "Cargo.toml 新增依赖 which 6 + gethostname 0.4；无 reqwest / hyper / curl 等 HTTP client；llm_summary 之外无外部 LLM client 依赖"
+    source: 流程级约束 / 架构红线
+    status: open
+
+  - item: "不变量 1：smoke 失败 → 文件系统零改动（C1.2 / C1.3 验收覆盖）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 2：shim 装机幂等（hash 比对，相同跳，不同覆盖，非 shim 报错）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 3：shell rc patch 幂等（marker block 检测）"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 4：单 agent 失败不阻塞其他 agent，InitReport.errors 汇总"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 5：dry-run 模式所有 write 操作无副作用"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 6：PATH 检查 ~/.local/bin 在前段，否则 warn"
+    source: 流程级约束
+    status: open
+
+  - item: "不变量 7：sh bridge chmod 0755"
+    source: 流程级约束
+    status: open
+
+  - item: "idiom #1 强类型 schema：identity / agent_detect / ShellKind 全部强类型 struct/enum；无 serde_json::Value 残留"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #2 error 变体颗粒度：IdentityError / OnboardingError 拆细变体，无 String reason 打包多种错误"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #3 newtype：ShellKind enum + BinaryHash newtype（shim hash 比对）落地"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #4 typestate-lite：Identity 字段全 private + accessor 返 Option<&str>，禁直暴 Option<String>"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #5 零拷贝：AGENTS const + AgentSpec &'static str；shell rc patch 流式 &str"
+    source: idiom checklist
+    status: open
+
+  - item: "idiom #6 编译期：AGENTS const slice + shell rc marker 字符串 const"
+    source: idiom checklist
+    status: open
+
+  - item: "守护 grep N1：grep -E 'task_writer|welcome.*task' src/onboarding.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N2：grep '\"--force\"|force:' src/main.rs init 周围 → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N3：grep 'FEISHU_HUB_' src/{identity,agent_detect,onboarding}.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N4：grep -E 'schema.*migrate|v0.*v1' src/onboarding.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N5：grep -E 'cargo install|reqwest|hyper|curl::' src/onboarding.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N8：grep -i 'fish|nushell|nu_' src/onboarding.rs 内 → 仅错误信息提示（非实装路径）"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep N9：grep -E '\"uninstall\"|\"reset\"|fn uninstall' src/main.rs → 0 命中"
+    source: 明确不做
+    status: open
+
+  - item: "守护 grep rust-idiom-first：grep -rE 'as_object_mut\\(\\)\\.unwrap\\(\\)|as_array_mut\\(\\)\\.unwrap\\(\\)' src/{identity,agent_detect,onboarding}.rs → 0 命中"
+    source: idiom checklist
+    status: open
+
+  - item: "CI 三 job（fmt / clippy / test）远端全绿"
+    source: 模块级
+    status: open
+
+  - item: "cargo test --doc 含 identity::current + onboarding::run 至少各 1 doc-test"
+    source: 模块级
+    status: open
