@@ -173,7 +173,7 @@ checks:
 
   - item: "CI 三 job（fmt / clippy / test）远端全绿"
     source: 模块级
-    status: open
+    status: passed
 
   - item: "cargo test --doc 全绿（本 feature 各模块 doc-comment 含简短示例）"
     source: 模块级
