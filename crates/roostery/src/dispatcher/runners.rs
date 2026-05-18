@@ -531,11 +531,19 @@ fn enrich_cc(raw: RawProcessOutcome) -> RunOutcome {
     };
 
     // Parse stdout as CC JSON if status is Success; otherwise skip parse.
+    // cost_usd source is untrusted runner stdout; serde_json rejects NaN/Inf
+    // at parse time, but a buggy or hostile runner can still emit negative
+    // values that would fail-open the budget gate on consume. Treat any
+    // non-finite or negative report as "unknown" → caller skips consume.
     let (cost_usd, parsed_text) = if matches!(status, RunnerStatus::Success) {
         match serde_json::from_str::<CcJsonOutput>(&raw.stdout) {
             Ok(body) => {
                 let txt = body.result.or(body.text);
-                (body.cost_usd.or(body.total_cost_usd), txt)
+                let cost = body
+                    .cost_usd
+                    .or(body.total_cost_usd)
+                    .filter(|v| v.is_finite() && *v >= 0.0);
+                (cost, txt)
             }
             Err(_) => (None, None),
         }
@@ -909,6 +917,41 @@ EOF
         };
         let out = enrich_cc(raw);
         assert_eq!(out.cost_usd, Some(0.5));
+    }
+
+    #[test]
+    fn enrich_cc_negative_cost_usd_treated_as_none() {
+        // Hostile / buggy runner reports negative cost; budget gate must
+        // not be fail-open when caller does `budget.consume(cost)`.
+        let raw = RawProcessOutcome {
+            exit_code: Some(0),
+            stdout: r#"{"cost_usd": -1.0, "result": "ok"}"#.to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+        let out = enrich_cc(raw);
+        assert!(
+            out.cost_usd.is_none(),
+            "negative cost_usd should be dropped, got {:?}",
+            out.cost_usd
+        );
+    }
+
+    #[test]
+    fn enrich_cc_falls_back_to_total_when_primary_negative() {
+        // Primary cost_usd negative → drop both; fallback only kicks when
+        // primary is None, not when it's a sanitization rejection.
+        let raw = RawProcessOutcome {
+            exit_code: Some(0),
+            stdout: r#"{"cost_usd": -1.0, "total_cost_usd": 0.3, "result": "ok"}"#.to_string(),
+            stderr: String::new(),
+            timed_out: false,
+        };
+        let out = enrich_cc(raw);
+        // total_cost_usd is the fallback only when primary is None at JSON
+        // level. Here primary parsed as Some(-1.0) → fallback skipped →
+        // sanitize drops the negative → final None.
+        assert!(out.cost_usd.is_none());
     }
 
     // --- codex audit finding-03 / -04: args validation ------------------
