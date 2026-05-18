@@ -15,5 +15,6 @@ pub mod redact;
 pub mod remoterefs;
 pub mod rules;
 pub mod runaway;
+pub mod runners;
 pub mod smoke;
 pub mod trace;
