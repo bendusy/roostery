@@ -1,7 +1,16 @@
 ---
 doc_type: feature-design
 feature: 2026-05-19-bot-bridge-cluster
-status: draft
+status: approved
+approved_at: 2026-05-19
+approved_notes: |
+  用户 2026-05-19 review approved；锁定 5 项默认倾向：
+  - A1: 假设 lark-cli 支持 im im_messages_subscribe（如发现不支持则起独立 issue）
+  - B1: daemon CLI 命名 = `roostery bot bridge`
+  - B2: bots.yaml 路径 = `~/.roostery/bots.yaml` 独立文件
+  - C1: /adjust 重启上限 = const ADJUST_MAX=1（Python parity）
+  - D2: ActiveRunnerRegistry 与 dispatcher::runners::RunnerRegistry 短期共存
+    避让；长期改名 RunnerKindRegistry 走 cs-refactor 独立处理
 summary: Phase 5 Module F 收尾子 feature——把 Python 期 5 个互相耦合的 bot 模块（bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router）合并重写成 Rust 的 `bot::bridge` 集群，提供"多 bot 长跑 daemon + @mention 路由 + IM 群里反向操控 agent（abort / adjust）+ 接力 task 写步骤"的能力。是 `agent-work-in-feishu` req 的第二维兑现（IM 群里指挥 agent，而不仅是 stop hook 被动出 task）。
 requirement: agent-work-in-feishu
 roadmap: rust-rewrite
