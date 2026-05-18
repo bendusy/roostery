@@ -381,8 +381,9 @@ fn reject(
     )
 }
 
-/// 把 step 写进 journal 并返还；journal append 失败仅吞（journal 是 best-effort
-/// 审计，不阻塞 dispatch 主流程）。
+/// 把 step 写进 journal 并返还；journal append 失败仅吞 + 留 warn 痕迹
+/// （journal 是 best-effort 审计，不阻塞 dispatch 主流程；但完全静默会让
+/// 磁盘满 / 权限错等部署问题在线下排不出来）。
 fn finalize_step(journal: &Journal, mut entry: JournalEntry, step: DispatchStep) -> DispatchStep {
     entry.result = match &step.status {
         StepStatus::Success => JournalResult::Ok {
@@ -410,7 +411,13 @@ fn finalize_step(journal: &Journal, mut entry: JournalEntry, step: DispatchStep)
             message: reason.clone(),
         },
     };
-    let _ = journal.append(&entry);
+    if let Err(e) = journal.append(&entry) {
+        tracing::warn!(
+            error = %e,
+            event_id = %step.event_id,
+            "dispatcher journal append failed; step continues (best-effort audit)"
+        );
+    }
     step
 }
 
