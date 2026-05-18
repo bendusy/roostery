@@ -109,10 +109,10 @@ items:
   - slug: dispatcher-loop
     description: Loop + Event bridge + roostery dispatcher 子命令（fire / replay / test-rule）
     depends_on: [dispatcher-rules, dispatcher-runners]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-18-dispatcher-loop
     minimal_loop: false
-    notes: "Phase 4；Python 版 7 个 test_dispatcher_*.py 核心 case 作 reference 翻译；case 行为以文档为准"
+    notes: "Phase 4 收尾；Python 版 7 个 test_dispatcher_*.py 核心 case 作 reference 翻译；case 行为以文档为准。Design 关键决策（user 拍板 2026-05-18）：(a) replay = live-replay 真跑 runner + 分配新 trace_id；(b) emitted_events 本期消费走自触发链式分发（BFS 队列 + trace.max_depth + fanout cap 16 双守门）；(c) fire 始终 exit 0 + journal 落档；(d) rules 命中但 runner kind 不在 registry → RunOutcome::Skipped"
 
   - slug: bot-task-writer
     description: Task writer 创建 Feishu task + append step stream + session cache
