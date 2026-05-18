@@ -122,14 +122,28 @@ pub fn scrub_argv(argv: &[String]) -> (Vec<String>, Vec<String>) {
 }
 
 /// Normalize a key: lowercase, replace `-` with `_`, strip leading `_`.
+/// Canonical form for sensitive-key comparison: lowercased, all
+/// non-alphanumeric chars stripped. Maps `access_token`, `Access-Token`,
+/// `accessToken`, `AccessToken`, `ACCESS_TOKEN`, `__access__token__` all to
+/// `accesstoken`. Loose by design so we don't leak secrets through casing
+/// variants seen in non-Feishu data sources (CC JSON, hooks, ad-hoc user
+/// payloads).
 fn normalize_key(key: &str) -> String {
-    let lower = key.to_ascii_lowercase().replace('-', "_");
-    lower.trim_start_matches('_').to_string()
+    key.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
 }
+
+static NORMALIZED_SENSITIVE_KEYS: LazyLock<Vec<String>> =
+    LazyLock::new(|| SENSITIVE_KEYS.iter().map(|k| normalize_key(k)).collect());
 
 fn is_sensitive_key(key: &str) -> bool {
     let normalized = normalize_key(key);
-    SENSITIVE_KEYS.iter().any(|k| *k == normalized)
+    if normalized.is_empty() {
+        return false;
+    }
+    NORMALIZED_SENSITIVE_KEYS.contains(&normalized)
 }
 
 fn is_sensitive_flag(flag: &str) -> bool {
@@ -296,6 +310,39 @@ mod tests {
         let argv = s(&["lark-cli", "--access-token", "abc"]);
         let (out, _) = scrub_argv(&argv);
         assert_eq!(out[2], MASK);
+    }
+
+    #[test]
+    fn scrub_value_camel_case_key_redacted() {
+        let v = json!({"accessToken": "leak-me", "user": "alice"});
+        let (out, paths) = scrub_value(&v);
+        assert_eq!(out["accessToken"], json!(MASK));
+        assert_eq!(out["user"], json!("alice"));
+        assert_eq!(paths, vec!["/accessToken".to_string()]);
+    }
+
+    #[test]
+    fn scrub_value_pascal_case_key_redacted() {
+        let v = json!({"AccessToken": "x"});
+        let (out, _) = scrub_value(&v);
+        assert_eq!(out["AccessToken"], json!(MASK));
+    }
+
+    #[test]
+    fn scrub_value_screaming_snake_case_key_redacted() {
+        let v = json!({"ACCESS_TOKEN": "x"});
+        let (out, _) = scrub_value(&v);
+        assert_eq!(out["ACCESS_TOKEN"], json!(MASK));
+    }
+
+    #[test]
+    fn is_sensitive_key_empty_string_false() {
+        // Normalization that produces empty string (e.g., "___" or "---")
+        // must not match the empty-normalized SENSITIVE_KEYS entries (none
+        // exist, but defense-in-depth).
+        assert!(!is_sensitive_key(""));
+        assert!(!is_sensitive_key("___"));
+        assert!(!is_sensitive_key("---"));
     }
 
     // ----- scrub_text tests (covering S3.1 - S3.5) -----
