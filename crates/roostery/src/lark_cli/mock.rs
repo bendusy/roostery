@@ -11,9 +11,19 @@ use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+/// Recorded call snapshot: args + the `RunOptions` actually passed in.
+/// **codex audit round-3 finding** 修复：以前 mock 丢弃 `RunOptions` 让
+/// profile / stdin / timeout 敏感的生产路径在测试中假绿。现 caller 可通过
+/// `calls_with_opts()` 验真 `--profile X` 是否真注入。
+#[derive(Debug, Clone)]
+pub struct RecordedCall {
+    pub args: Vec<String>,
+    pub opts: RunOptions,
+}
+
 struct MockState {
     queue: VecDeque<Result<Value, LarkError>>,
-    calls: Vec<Vec<String>>,
+    calls: Vec<RecordedCall>,
 }
 
 /// Test double for [`LarkRunner`]. Pre-load responses with `enqueue_ok` /
@@ -43,8 +53,21 @@ impl MockLarkRunner {
         self
     }
 
-    /// Snapshot of recorded calls (owned args per call, in chronological order).
+    /// Snapshot of recorded calls — backward-compat: args only. For full
+    /// `RunOptions` inspection see [`Self::calls_with_opts`].
     pub fn calls(&self) -> Vec<Vec<String>> {
+        self.inner
+            .lock()
+            .unwrap()
+            .calls
+            .iter()
+            .map(|c| c.args.clone())
+            .collect()
+    }
+
+    /// Snapshot including the `RunOptions` passed in（profile / stdin / timeout）。
+    /// Use this in any test asserting profile-sensitive / stdin-sensitive path.
+    pub fn calls_with_opts(&self) -> Vec<RecordedCall> {
         self.inner.lock().unwrap().calls.clone()
     }
 
@@ -84,11 +107,12 @@ impl Drop for MockLarkRunner {
 
 #[async_trait]
 impl LarkRunner for MockLarkRunner {
-    async fn run_with_options(&self, args: &[&str], _opts: RunOptions) -> Result<Value, LarkError> {
+    async fn run_with_options(&self, args: &[&str], opts: RunOptions) -> Result<Value, LarkError> {
         let mut state = self.inner.lock().unwrap();
-        state
-            .calls
-            .push(args.iter().map(|s| s.to_string()).collect());
+        state.calls.push(RecordedCall {
+            args: args.iter().map(|s| s.to_string()).collect(),
+            opts,
+        });
         match state.queue.pop_front() {
             Some(r) => r,
             None => panic!(
@@ -135,6 +159,44 @@ mod tests {
         assert_eq!(mock.run(&["a"]).await.unwrap(), json!(1));
         assert_eq!(mock.run(&["b"]).await.unwrap(), json!(2));
         assert_eq!(mock.run(&["c"]).await.unwrap(), json!(3));
+    }
+
+    #[tokio::test]
+    async fn calls_with_opts_records_profile_and_stdin() {
+        // codex audit round-3 test: 验 RunOptions 被 mock 记录而非丢弃
+        let mock = MockLarkRunner::new();
+        mock.enqueue_ok(json!({}));
+        let opts = RunOptions::new()
+            .with_profile("bot-default")
+            .with_stdin("payload-bytes")
+            .with_timeout(Duration::from_secs(7));
+        let _ = mock.run_with_options(&["task", "+create"], opts).await;
+        let calls = mock.calls_with_opts();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0].args,
+            vec!["task".to_string(), "+create".to_string()]
+        );
+        assert_eq!(calls[0].opts.profile.as_deref(), Some("bot-default"));
+        assert_eq!(calls[0].opts.stdin.as_deref(), Some("payload-bytes"));
+        assert_eq!(calls[0].opts.timeout, Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn calls_backward_compat_returns_args_only() {
+        let mock = MockLarkRunner::new();
+        mock.enqueue_ok(json!({}));
+        let _ = mock
+            .run_with_options(
+                &["im", "+messages-send"],
+                RunOptions::new().with_profile("p"),
+            )
+            .await;
+        // 旧 calls() 接口仍返 Vec<Vec<String>>
+        assert_eq!(
+            mock.calls(),
+            vec![vec!["im".to_string(), "+messages-send".to_string()]]
+        );
     }
 
     #[tokio::test]
