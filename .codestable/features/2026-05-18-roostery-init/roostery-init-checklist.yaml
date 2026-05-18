@@ -161,7 +161,7 @@ checks:
 
   - item: "CI 三 job（fmt / clippy / test）远端全绿"
     source: 模块级
-    status: open
+    status: passed
 
   - item: "cargo test --doc 含 identity::current + onboarding::run 至少各 1 doc-test"
     source: 模块级
