@@ -4,7 +4,7 @@ slug: runtime-neutral
 pitch: 不被某家 agent runtime 绑死——CC / Codex / Gemini / 自己写的，都能在同一套飞书面里出活。
 status: draft
 last_reviewed: 2026-05-15
-implemented_by: [2026-05-18-dispatcher-trace-budget]
+implemented_by: [2026-05-18-dispatcher-trace-budget, 2026-05-18-dispatcher-rules]
 tags: [vendor-neutral, agent-runtime, interoperability]
 ---
 
@@ -48,3 +48,4 @@ agent runtime 生态正在裂变。Claude Code、Codex、Gemini、OpenClaw、Cur
 
 - 2026-05-15：drafted（初稿落档）
 - **2026-05-18**：`dispatcher-trace-budget` 落地（feature `2026-05-18-dispatcher-trace-budget`），Phase 4 Module E 起步。`TraceContext`（深度守门）+ `BudgetState`（配额守门）+ `RunawayTracker`（事后阈值兜底）三独立 gate 模块就位。**这是 req 的"loop 保护是中立 dispatcher 的前提"基础设施层**：三 gate 不感知具体哪家 runtime，是后续 Phase 4 dispatcher-loop 接入任意 runtime 时必经的守门基底。req 仍保持 `draft`——用户视角"换 runtime 飞书侧呈现不变"要 Phase 4 收尾 dispatcher-loop + Phase 5 bot-stop-hook 全套兑现
+- **2026-05-18**：`dispatcher-rules` 落地（feature `2026-05-18-dispatcher-rules`），Phase 4 Module E 第 2 子 feature。`HookEvent` §4.4 schema 落地（外部 hook 触发的事件标准形状）+ Rule engine MVP（3 维 AND match：hook_source / workspace_glob / trigger_meta_eq；first-match-wins；self-event 防自激）。**这是 req 的"接入新 runtime 写一份 adapter"用户配置接入面**：用户通过 `~/.roostery/rules.yaml` 把 HookEvent 路由到具体 runner，规则维度独立于 runtime——CC / Codex / Gemini / 自定义 runtime 共享同一套规则 schema。Action 是 opaque `{runner, args: Value}` 透传给 Runner trait impl（dispatcher-runners feature 落地后才有真消费）。req 仍保持 `draft`——dispatcher-loop 收尾后才有完整链路

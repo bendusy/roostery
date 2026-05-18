@@ -93,7 +93,7 @@ items:
   - slug: dispatcher-rules
     description: Rules 模块 + YAML 规则反序列化 + 匹配逻辑
     depends_on: [dispatcher-trace-budget]
-    status: in-progress
+    status: done
     feature: 2026-05-18-dispatcher-rules
     minimal_loop: false
     notes: "Phase 4；rule schema 重新设计"

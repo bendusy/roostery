@@ -440,12 +440,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
     - 主要支持的 req：**`runtime-neutral`**（loop 保护是中立 dispatcher 的前提）
     - 备注：Phase 4 起步 feature；3 独立 gate 模块 `trace` / `budget` / `runaway`（互不引用，dispatcher-loop 上层 caller 串场景）；`TraceContext`（depth+max_depth 守门，env 跨 process 传播）+ `BudgetState`（roadmap §4.6 default 单 bucket + f64 USD + 跨日 rollover + atomic 持久化）+ `RunawayTracker`（事后兜底，window/threshold 内存滑动窗口）；Cargo.toml 0 新增依赖；`TraceId` newtype 与 `business-identifier-newtype` decision 一致；本 feature 完成 = caller 装弹就绪，dispatcher 还不会跑（等 dispatcher-loop 收尾 feature）
 
-12. **`dispatcher-rules`** — Rules 模块 + YAML 规则反序列化 + 匹配逻辑
+12. **`dispatcher-rules`** — Rules 模块 + YAML 规则反序列化 + 匹配逻辑 — **done**（feature `2026-05-18-dispatcher-rules`）
     - 所属模块：E
     - 依赖：`dispatcher-trace-budget`
-    - 状态：planned
+    - 状态：**done**（feature `2026-05-18-dispatcher-rules`）
     - 主要支持的 req：`runtime-neutral`
-    - 备注：Phase 4；rule schema 重新设计
+    - 备注：Phase 4 第 2 子 feature；**rule schema 全新设计**（拒绝 Python parity）；HookEvent §4.4 schema 同步落地；3 维 AND MVP（hook_source eq + workspace_glob fnmatch 经 globset + trigger_meta 点路径 eq）；Action opaque `{runner, args: Value}` 透传；无模板引擎；first-match-wins；self-event 防自激（`dispatcher.` / `roostery.` 前缀短路）；本期不交付 dispatch 编排（dispatcher-loop feature）
 
 13. **`dispatcher-runners`** — `Runner` trait（§4.3）+ `cc_headless` / `codex_exec` / `gemini_headless` / `noop` 默认实现 + `runner_registry`
     - 所属模块：E
