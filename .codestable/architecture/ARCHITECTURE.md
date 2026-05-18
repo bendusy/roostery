@@ -2,7 +2,7 @@
 
 > 状态：active（Rust 重写期更新）
 > 创建日期：2026-05-15
-> 末次刷新：2026-05-18（release-0.1.0-prep feature accept；version bump 0.0.0 → 0.1.0 + README 五段重写 user-why leading + CHANGELOG.md 起步 + workspace Cargo.toml metadata 7 字段补齐为 0.2.0 crates.io 预热；首个 release 对外门面形态达成）
+> 末次刷新：2026-05-19（post-0.1.0 rust-idiom audit + 4 commit 落地：dispatcher dead-code 清理 / process_one reject() helper 重构 / bot_stop_hook + onboarding 大文件 split 子目录 / FallbackCtx Parameter Object；rust-module-organization decision update §5 加 cross-link）
 
 ## 1. 项目简介
 
@@ -345,7 +345,8 @@ Feishu Base 作为索引层（**非** source of truth）。
 4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge` + 模板嵌入扩展，loop 不感知 provider
 5. **`llm_summary` 模块是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral
 6. **业务标识符 newtype 隔离**（自 core-remoterefs 起）：对**从飞书侧拿到的、有明确业务语义角色的标识符**（token / id / cursor）一律用 newtype + `#[serde(transparent)]` 隔离类型；不实现互转 `From` impl。Phase 4 dispatcher 的 `TraceId` / `EventId` / `ParentEventId` 是合格候选；**不**适用于"还没成为业务 token 的字符串"（subcommand 名 / 原始 argv / 普通 String 参数）——后者 newtype 化是 noise。详见 `.codestable/compound/` 待归档 convention
-7. **shim / smoke 与 LarkRunner 走三条独立 I/O 路径**（自 lark-cli-shim 起，roostery-smoke 进一步验证）：
+7. **Rust 模块组织五档约定**（自 core-redact / journal-core 起，0.1.0 后由 bot_stop_hook / onboarding 大规模实战验证）：单文件 < 500 行 / 500+ 升档 2 子目录 + `mod.rs` / 独立 crate / Cargo bin target / 资源文件子目录。**主动路径**走 feature `design §2.5` 评估；**回溯路径**走 `cs-audit → cs-refactor`（rustc E0761 禁止 `foo.rs` 与 `foo/mod.rs` 并存，搬运必须原子动作）。详见 `.codestable/compound/2026-05-16-decision-rust-module-organization.md`
+8. **shim / smoke 与 LarkRunner 走三条独立 I/O 路径**（自 lark-cli-shim 起，roostery-smoke 进一步验证）：
    - **shim**：streaming bytes 模型 + `std::thread::spawn` + `std::process`（透明 tee 4 KiB chunks 给用户，head buffer 副本写 journal）
    - **smoke**：raw bytes 模型 + 同步 `std::process` + `try_wait` 50ms 轮询（用 stdout 文本检 "Dry Run" marker；不解析 JSON；写 state file 不写 journal）
    - **`LarkRunner`**：buffered Value 模型 + tokio（`wait_with_output` 一次性 collect + `serde_json::Value` parse；调用结果返给 caller）

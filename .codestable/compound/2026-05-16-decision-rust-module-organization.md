@@ -4,8 +4,8 @@ category: convention
 slug: rust-module-organization
 status: active
 created: 2026-05-16
-updated: 2026-05-18
-tags: [rust, module-layout, codebase-structure, cargo-bin-target, resource-templates]
+updated: 2026-05-19
+tags: [rust, module-layout, codebase-structure, cargo-bin-target, resource-templates, retrospective-split]
 ---
 
 # Rust 模块组织约定
@@ -94,10 +94,20 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 
 ### 升档触发与执行
 
+主动路径（feature 设计阶段预测）：
+
 - 单文件即将 > 500 行 → 该文件所属的下一个 feature 在 design §2.5 评估是否升档 2，按"只搬不改行为"标准独立成 step 跑
 - 档 4 bin 单文件即将 > 500 行 → 升级到 `src/bin/{name}/main.rs` + 子模块（同 crate）
 - 档 4 bin release LTO 后二进制 > 5 MB（size-sensitive 场景如 shim 每次 lark-cli 调用都启动） → 评估升 档 3 独立 crate
 - 不在功能 feature 里偷偷重组——结构变更必须独立 commit，编译器全程绿灯
+
+回溯路径（post-hoc 拆分；2026-05-19 update 补档）：
+
+- feature 在 design §2.5 漏算 + implement 时未触发反射检查 → 单文件可能滚到 800-1500+ 行才被注意到
+- 处理路径：`cs-audit` 系统审计发现"single-file > 800 行 + 多概念聚集" → `cs-refactor` 标准流程（scan / design / apply）做 "只搬不改" 拆分
+- **不要在下一个功能 feature 里"顺手拆"**——会把功能 PR 稀释成综合改动，违反 design §2.5 边界
+- **rustc E0761 约束**：`pub mod foo;` 解析时 `foo.rs` 与 `foo/mod.rs` 不能并存。所以拆分必须**原子动作**（删旧 + 写新 6 文件 in one apply step），不能"先建子目录再渐进搬运"——分两步会编译失败
+- 拆分后期望 mod.rs 体量：60-360 行不等，看模块编排重不重；类型纯打包到 types.rs / 工具类纯打包到 util.rs / 核心业务流单独成 push.rs 等模式
 
 ## 为什么这样选
 
@@ -132,7 +142,8 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 - **审视周期**：
   - Phase 2（lark-cli-wrapper / smoke / shim）落地后回看一次——届时 src/ 会有 ~8 文件，验证档位阈值是否仍合理；不合理走本 decision 的 `update` 流程（不 supersede，结论本身没变）
   - **2026-05-17 update**：Phase 2 收尾审视——三档（档 1/2/3）阈值经 redact / journal / lark_cli 验证合理；新增第 4 档（Cargo bin target）覆盖 shim 路径。下次审视点 Phase 5（bot bridge feature 落地后，预计触发新的辅助 bin 如 stop-hook 脚本嵌入）
-  - **2026-05-18 update**：Phase 3 hooks-merge 落地——新增第 5 档（资源文件子目录）覆盖 `crates/roostery/src/templates/` 3 文件（cc_stop_hook.json / codex_stop_hook.json / agent_stop_notify.sh）`include_str!` 嵌入模式。档 1-4 都管 Rust 源码组织，档 5 管"非 Rust 源码 + 编译期嵌入"，与档 1-4 正交。下次审视点同上（Phase 5）
+  - **2026-05-18 update**：Phase 3 hooks-merge 落地——新增第 5 档（资源文件子目录）覆盖 `crates/roostery/src/templates/` 3 文件（cc_stop_hook.json / codex_stop_hook.json / agent_stop_notify.sh）`include_str!` 嵌入模式。档 1-4 都管 Rust 源码组织，档 5 管"非 Rust 源码 + 编译期嵌入"，与档 1-4 正交
+  - **2026-05-19 update**：0.1.0 后系统审计 `2026-05-18-post-release-rust-idiom`（finding-02 / finding-04）首次大规模实战验证档 2 升档——`bot_stop_hook.rs` 1463 行 → `bot_stop_hook/` 6 文件（mod 59 + types 174 + stop_input 246 + util 216 + push 480 + cli 316）；`onboarding.rs` 1067 行 → `onboarding/` 6 文件（mod 359 + types 198 + shim 138 + hooks 91 + lark_cli_override 243 + env_rc 135）。**关键经验**：(a) 500 行硬阈值在实战中略宽——bot_stop_hook 在 ~800 行时已经多概念聚集，理想触发点是 ~800 行；保守阈值仍守 500 但识别"800 行+多概念"加 cs-audit 抓回溯式拆分；(b) **mod.rs 内容沉淀模式**：当模块有中心 error type 或主编排 fn 时，mod.rs 不止做 re-export，而是"中心 error + 主 fn + format/共享小 helpers + pub use"组合，体量 60-360 行皆可接受；纯类型 / 工具 / 业务流 / CLI 各自落兄弟文件；(c) 新增"回溯路径"小节（见上 §升档触发与执行）说明 post-hoc 拆分走 cs-audit → cs-refactor，不掺进 feature；(d) rustc E0761 约束确认——`foo.rs` 与 `foo/mod.rs` 不可并存，搬运必须原子动作。**0.1.0 前 5 个新模块 lark_cli / dispatcher / bot_stop_hook / onboarding / 加 templates 子目录全部按本约定就位**。下次审视点 Phase 6（reporting feature 落地后）
 
 ## 相关文档
 
@@ -140,4 +151,8 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 - `.codestable/features/2026-05-15-journal-core/journal-core-design.md` §2.5：第二次 flag，触发本归档
 - `.codestable/features/2026-05-17-lark-cli-shim/lark-cli-shim-design.md` §2.5：识别出档 4 Cargo bin target，跑通后由 acceptance 阶段触发本 decision update（2026-05-17）
 - `.codestable/features/2026-05-18-hooks-merge/hooks-merge-design.md` §2.5：识别出档 5 资源文件子目录，跑通后由 acceptance 阶段触发本 decision update（2026-05-18）
+- `.codestable/audits/2026-05-18-post-release-rust-idiom/finding-02.md`：bot_stop_hook 1463 行单文件 → 拆 `bot_stop_hook/` 子目录的 audit 起点
+- `.codestable/audits/2026-05-18-post-release-rust-idiom/finding-04.md`：onboarding 1067 行单文件 → 拆 `onboarding/` 子目录的 audit 起点
+- `.codestable/refactors/2026-05-19-bot-stop-hook-split/`：bot_stop_hook split 实施记录（含 rustc E0761 约束发现 + 原子动作经验）
+- `.codestable/refactors/2026-05-19-onboarding-split/`：onboarding split 实施记录
 - `.codestable/architecture/ARCHITECTURE.md` §3 Module A-H：roadmap-level module 划分（注意：与本 Rust 文件 / 目录约定是**不同维度**——roadmap module 是规划聚合，本约定是 Rust 物理结构）
