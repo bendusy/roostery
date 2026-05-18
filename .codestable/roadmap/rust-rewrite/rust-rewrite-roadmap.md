@@ -454,12 +454,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
     - 主要支持的 req：**`runtime-neutral`**（这是中立接入的执行点）
     - 备注：Phase 4 第 3 子 feature；首发实际落地 = `noop` + `cc_headless`（`codex_exec` / `gemini_headless` 完全不出现，推后到真有需求时新增 feature 加 impl，与 runtime-neutral req 边界"首发不保证所有 runtime 同等支持"一致）。**与 §4.3 偏离两项**（user 拍板）：(a) `Runner::run` 不收 `&BudgetGate` 参数（budget gate 编排留给 dispatcher-loop）；(b) `RunOutcome` 加 `cost_usd: Option<f64>` 字段。建议后续 `cs-roadmap update` 把 §4.3 原契约改齐。Runner trait async + 内部 `tokio::task::spawn_blocking` 包同步 `std::process::Command`（不引 `tokio::process` 避 ETXTBSY race）；env sanitize 经 `SAFE_ENV_FORWARD` const allowlist；CC JSON 解析容错——失败仍返 Success cost None
 
-14. **`dispatcher-loop`** — Loop + Event bridge + `roostery dispatcher` 子命令（fire / replay / test-rule）
-    - 所属模块：E
+14. **`dispatcher-loop`** — Loop + Event bridge + `roostery dispatcher` 子命令（fire / replay / test-rule）— **done**（feature `2026-05-18-dispatcher-loop`）
+    - 所属模块：E（**Phase 4 / Module E 整体完成**）
     - 依赖：`dispatcher-rules`、`dispatcher-runners`
-    - 状态：planned
-    - 主要支持的 req：`runtime-neutral`
-    - 备注：Phase 4；Python 版 7 个 `test_dispatcher_*.py` 的核心 case 作 reference 翻译为 Rust 集成测试，case 行为以文档为准（特别是 trace / budget / 错误处理）
+    - 状态：**done**（feature `2026-05-18-dispatcher-loop`）
+    - 主要支持的 req：`runtime-neutral`（dispatcher 编排层最终兑现层）
+    - 备注：Phase 4 收尾子 feature。串 trace / budget / runaway / rules / runners / journal 6 上游模块为 `HookEvent in → DispatchOutcome out + journal` 主链路，暴露 `roostery dispatcher fire / replay / test-rule` 三 CLI 子命令；fire 主链路 5 gate 顺序 (trace.check_depth → rules.matches → budget.check_or_raise(0.0) → runaway.record + check → registry.find → runner.run → budget.consume + save → journal.append)；emitted_events 链式自触发 BFS 队列 + `trace.max_depth` 守深度 + `DEFAULT_MAX_FANOUT=16` 守 width 双守门；replay live 真跑 runner + 分配新 trace_id (不沿用) + journal trigger_meta.replay_of 关联源；unknown runner kind → `StepStatus::Skipped`；fire 始终 exit 0 + journal 落档失败原因 (hook 调用方对错误不敏感)；replay / test-rule 走 DispatchError exit 1。dispatcher.rs 不消费 LarkRunner / 不直接 spawn / 不引 reqwest（红线 N1-N3）。0 新增 Cargo 依赖。journal 模块加 `load_by_trace_id` read API（首次有 read path 启动）。Accepted 2026-05-18（commit `7fd07fc`，CI run #26018196490 全绿）
 
 ### Module F · Bot Bridge
 

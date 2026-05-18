@@ -27,7 +27,7 @@
 | `lark-cli` | 与飞书通信的唯一 sanctioned subprocess wrapper（pin 在 1.0.28） |
 | `LarkRunner` trait | Rust 期 lark-cli wrapper 的抽象接口（async + Send + Sync），下游所有模块依赖 trait 而非具体 struct；已落地 `crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）。三实现：`LarkCli`（subprocess）/ `MockLarkRunner`（测试替身）/ `Journaled<R>`（journal 装饰器）。`run` 和 `run_with_options` 双 method 见 roadmap §4.1 |
 | `LarkError` | `#[non_exhaustive]` rich enum + thiserror，4 变体 `Spawn` / `NonZeroExit` / `OutputParse` / `Timeout`，每变体携带专有数据；`retriable()` method（非字段）。caller 必经 `match` + `_ =>` 处理（外部 crate E0004 守护）。见 roadmap §4.1 |
-| Dispatcher | 本地事件 → 规则匹配 → runner 执行的桥接层（Module E，Phase 4） |
+| Dispatcher | 本地事件 → 规则匹配 → runner 执行的桥接层（Module E，Phase 4 完成）。落地于 `crates/roostery/src/dispatcher.rs` + 5 上游 gate / engine 模块（trace / budget / runaway / rules / runners） |
 | Journal | 本地 jsonl 审计日志（默认 `~/.roostery/journal/`，可 `$ROOSTERY_HOME` 覆盖），仅作 replayable audit + portable data |
 | `JournalEntry` schema | journal 单行结构，11 字段；`schema_version=1` 自 journal-core 落地起对外公开承诺，破坏性改动需 bump + 旧版兼容反序列化 + cs-roadmap update（见 roadmap §4.2） |
 | `ROOSTERY_HOME` | Roostery 本地 state 根目录的环境变量覆盖；未设时默认 `~/.roostery/`。**不再读** Python 期 `FEISHU_HUB_HOME`（一次性切换） |
@@ -68,6 +68,9 @@
 | `RunOutcome` / `RunnerStatus` / `RunnerError` | `runners.rs`。`RunOutcome` 5 字段（`status: RunnerStatus / stdout: String / stderr: String / emitted_events: Vec<HookEvent> / cost_usd: Option<f64>`）。`RunnerStatus` 三态 `Success / Failed { reason } / Skipped { reason }`（`#[serde(tag = "kind", rename_all = "snake_case")]`）。`RunnerError` `#[non_exhaustive]` 4 变体（`BinaryNotFound / SpawnFailed / Timeout / OutputParseFailed`）—— **基础设施失败**（spawn / timeout / 解析）；与 `RunOutcome.status.Failed`（**runner 业务失败**，跑完了但 exit code 非 0）语义分层 |
 | `RunnerRegistry` | `runners.rs`。`Vec<Box<dyn Runner>>` linear-scan registry（n=2-4，O(n) 可忽略）。公开 API：`new() / with_runner(Box<dyn Runner>) -> Self / with_defaults() -> Self / find(&str) -> Option<&dyn Runner> / len / is_empty`。`with_defaults` 自动注册 `NoopRunner` + `CcHeadlessRunner`；同 kind 二次注册 linear find 返第一（用户责任不报错）|
 | `NoopRunner` / `CcHeadlessRunner` | `runners.rs`。Phase 4 dispatcher-runners 首发两实装。`NoopRunner::kind() == "noop"`，`run` 返 `RunOutcome { status: Success, stdout/stderr/emitted_events 空, cost_usd: None }`。`CcHeadlessRunner::kind() == "cc_headless"`，调 `claude -p <prompt> --output-format json [--model <m>] [--resume <id>]`；`bin_override: Option<PathBuf>` 测试可注入；走 `tokio::task::spawn_blocking` 包同步 `std::process::Command`（不引 `tokio::process` 避 ETXTBSY race）；stdout JSON parse 解 `cost_usd / result / text`，**解析失败仍返 Success cost None**；timeout 走 `args.timeout_ms` 覆盖 `DEFAULT_TIMEOUT_MS`。`emitted_events` 本期始终空 Vec（chain dispatch 推给 dispatcher-loop）|
+| `DispatchOutcome` / `DispatchStep` / `StepStatus` | Phase 4 落地的 `crates/roostery/src/dispatcher.rs`（feature `2026-05-18-dispatcher-loop`）。`DispatchOutcome` 3 字段（`trace_id: TraceId` / `root_event_id: String` / `dispatched: Vec<DispatchStep>`）= 单次 `fire` 编排总览；`DispatchStep` 7 字段（`event_id` / `hook_source` / `depth` / `matched_rule: Option<String>` / `runner_kind: Option<String>` / `status: StepStatus` / `fanout: usize`）= 链式分发中每个 event 一条 step。`StepStatus` 5 态（`Success` / `Skipped { reason }` / `GateRejected { reason }` / `Failed { reason }` / `NoMatch`）覆盖 fire 主链路全部分支可观察结果；`reason` 字符串承载 gate / runner 原始错误描述给 journal 落档 |
+| `DispatchError` | `dispatcher.rs`。dispatcher 编排层错误（与 `RunnerError` / `RulesError` / `BudgetError` 分层不混）。`#[non_exhaustive]` 6 变体（`ConfigLoadFailed` / `RulesLoadFailed` / `JournalDirNotFound` / `ReplayNotFound` / `EventReconstructFailed` / `BadCliInput`）。**`fire` 内部所有 gate / runner 失败不冒泡**——全部走 `journal.append` 落档 + `StepStatus` 反映；`replay` / `test_rule` 因为用户主动调用对错误敏感，DispatchError 直接返给 caller 让 main.rs exit 1。`fire` 主入口加载阶段（config / rules load 失败）目前在 `main.rs::run_fire` 内做 fallback 写 eprintln，未来可改走 DispatchError 路径 |
+| `DEFAULT_MAX_FANOUT` | `dispatcher.rs:28` 公开 `usize = 16` const。`fire` 链式分发的 single-step width 上限（`trace.max_depth` 守深度，本 const 守 width）——单个 runner 返 `emitted_events` 超 16 条时截断 + journal 标 `fanout_truncated`。防 runner bug / 链式风暴把队列撑爆 |
 | `SAFE_ENV_FORWARD` | `runners.rs:36` 公开 `&[&'static str]` const allowlist。子进程 env 经此过滤——父 hook 状态（如 `ROOSTERY_AGENT`）**不串到子 agent**避 trace 链断裂。覆盖：POSIX baseline（USER/LOGNAME/SHELL/TMPDIR）+ XDG_* + 代理（HTTP_PROXY etc.）+ TLS CA + API keys（ANTHROPIC/OPENAI/GEMINI/GOOGLE）+ Custom base URLs + 各 vendor config dirs。私有 helper `prep_env(ctx, kind)` 合并 allowlist + POSIX 兜底（PATH/HOME/LANG/TERM）+ trace 三 env（`to_env_pairs()`）|
 | `DEFAULT_TIMEOUT_MS` / `STDOUT_HEAD_CAP` | `runners.rs:30-31` 公开 const，分别 `600_000` (10 min) / `4096` (4 KiB)。CcHeadless 默认 timeout + stdout/stderr 截断阈值 |
 
@@ -222,7 +225,22 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 - 不变量：TraceContext 不可变（new_root/child 返新值；stamp_journal 仅借用 mut entry 字段）；depth 单调递增（child 总 +1，无 decrement API）；budget save atomic（.tmp + rename + 父目录自建）；budget rollover 幂等（同日多次调无副作用）；BUDGET_SCHEMA_VERSION=1 公开承诺；runaway tracker drop 即丢；runaway 窗口清理懒计算（record 时 retain）
 - Cargo.toml 0 新增依赖（trace 用 getrandom 既有；budget 用 serde_json + chrono 既有；runaway std-only）；测试用 atomic clock 不触碰 env，三模块设计上独立于 env 状态
 
-- 子 feature：**`dispatcher-trace-budget`（done）** / **`dispatcher-rules`（done）** / **`dispatcher-runners`（done）** / `dispatcher-loop`
+- 子 feature：**`dispatcher-trace-budget`（done）** / **`dispatcher-rules`（done）** / **`dispatcher-runners`（done）** / **`dispatcher-loop`（done）** —— **Module E 整体完成（Phase 4 收尾）**
+
+**dispatcher 主循环模块**（已落地，feature `2026-05-18-dispatcher-loop`，Phase 4 第 4 / 收尾子 feature）：
+
+- 新文件 `crates/roostery/src/dispatcher.rs`（产品 ~470 行 + 内联测 ~530 行）；`journal.rs` 加 `load_by_trace_id` read API；`main.rs` 加 `Command::Dispatcher` 嵌套 `fire / replay / test-rule` clap subcommand；`lib.rs` 加 1 pub mod；新测试文件 `tests/dispatcher_integration.rs` 7 集成测试；**0 新增 Cargo 依赖**
+- 公开 API：
+  - `dispatcher::{fire, replay, test_rule, DispatchOutcome, DispatchStep, StepStatus, DispatchError, DEFAULT_MAX_FANOUT}`
+  - `journal::load_by_trace_id(dir, trace_id) -> std::io::Result<Vec<JournalEntry>>`（journal 首次有 read API）
+  - CLI: `roostery dispatcher fire [--agent --session --cwd --summary] [--stdin-event] [--verbose]` / `replay --trace <id>` / `test-rule [flags]`
+- 设计约束 / 关键决策（user 拍板）：
+  - **`fire` 始终 exit 0 + journal 落档失败原因**（hook 调用方对错误不敏感）；`replay` / `test-rule` DispatchError exit 1（用户主动调）
+  - **emitted_events 本期消费走自触发链式分发**（BFS 队列 + `ctx.child()` depth+1 + `trace.check_depth` gate）
+  - **`replay` live 真跑 runner**（不 dry）+ **分配新 trace_id**（不沿用，避审计混淆）+ journal `trigger_meta.replay_of` 字段关联源
+  - **unknown runner kind → `StepStatus::Skipped`**（与 runtime-neutral req 一致：runtime 未接入前用户感知 not supported；budget 不消费）
+- 不变量（fire 主链路）：5 gate / 1 engine 顺序 `trace.check_depth → rules.matches → budget.check_or_raise(0.0) → runaway.record + check → registry.find → runner.run → budget.consume(cost) + save`；每分支 journal.append；`trace.max_depth` 守深度 + `DEFAULT_MAX_FANOUT` 守 width 双守门；`dispatcher.rs` 不消费 LarkRunner / 不直接 spawn / 不引 reqwest（红线 grep N1-N3 守护）；rules / config 在 fire 入口加载一次，链式分发期间不重读
+- caller 编排终点：`bot-stop-hook`（Phase 5）会在 stop hook sh 喂 HookEvent 给 `roostery dispatcher fire`；目前 `templates/agent_stop_notify.sh` 已经走这条路径，本 feature 落地后该模板从"clap unknown subcommand 被 `|| true` 吞"切换到"真跑 dispatcher 主循环"
 
 **runners 模块**（已落地，feature `2026-05-18-dispatcher-runners`，Phase 4 第 3 子 feature）：
 
@@ -306,3 +324,6 @@ Feishu Base 作为索引层（**非** source of truth）。
 13. **Runner 子进程 env 必经 `SAFE_ENV_FORWARD` allowlist**（自 feature `2026-05-18-dispatcher-runners` 落地起）：父 hook 状态（如 `ROOSTERY_AGENT` / `ROOSTERY_REAL_LARK_CLI` / 任意 `ROOSTERY_*` 调用方 state）**不串到子 agent**——避 trace 链断裂、避用户 env 噪声透传到 LLM 服务、避隐式依赖。新增允许的 env 必须改 `runners::SAFE_ENV_FORWARD` const（grep-able 单点定义）+ 改 design doc 说明理由。trace ctx 三 env（`ROOSTERY_TRACE_ID` / `_DEPTH` / `_PARENT_EVENT_ID`）单独经 `trace::to_env_pairs()` 注入，**优先级覆盖**任何 collide 的父 env
 13. **`HOOK_EVENT_SCHEMA_VERSION = 1` + `RULES_SCHEMA_VERSION = 1` 双公开承诺**：自 feature `2026-05-18-dispatcher-rules` 落地起，`HookEvent` schema 字段名 / 类型 + `~/.roostery/rules.yaml` schema 变更需 bump version + `cs-roadmap update` + 旧版兼容反序列化。同 `JournalEntry` / `Config` / `BudgetState` 模型
 14. **dispatcher self-event 防自激约定**：`HookEvent.hook_source` 以 `dispatcher.` / `roostery.` 开头的事件被 `rules::matches` 短路返 `None`——这是 dispatcher 自己产生的事件不应再触发新规则评估的硬约束（防自激死循环）。`SELF_EVENT_PREFIXES` const 在 `rules.rs:33`；dispatcher-loop 上层 caller 命名自身 emit event 时**必须**用 `dispatcher.` / `roostery.` 前缀
+15. **`dispatcher::fire` 始终 exit 0**（自 feature `2026-05-18-dispatcher-loop` 落地起）：`roostery dispatcher fire` 子命令无论 gate 拒 / runner 失败 / DispatchError 都 `ExitCode::SUCCESS`，失败原因走 journal 落档。**理由**：hook 调用方（CC / Codex SessionEnd sh）对错误不敏感（hook 已结束），分级 exit code 只会污染 hook 链上下游。`replay` / `test-rule` 不在此约束内——这俩用户主动调，DispatchError exit 1 让脚本能感知失败
+16. **emitted_events 链式分发 fanout cap**（自 feature `2026-05-18-dispatcher-loop` 落地起）：`fire` 内部 BFS 队列消费 `RunOutcome.emitted_events` 时，单 step 单批 emitted_events 个数 ≤ `dispatcher::DEFAULT_MAX_FANOUT`（= 16），超出截断 + journal 标 `fanout_truncated`。**理由**：`trace.max_depth` 守深度，但单层 width 也需守门，防 runner bug / 链式风暴把队列撑爆。改 cap 必须改 const + 改 design doc 说明
+17. **`dispatcher.rs` 不直接走飞书 IO + 不直接 spawn**（自 feature `2026-05-18-dispatcher-loop` 落地起）：dispatcher 只做编排——飞书 IO 责任在具体 Runner impl 内部（如 CcHeadless 调 `claude` binary）或后续 Phase 5 `bot-task-writer` feature；子进程 spawn 责任在 Runner impl。`dispatcher.rs` grep `LarkRunner|lark_cli::|reqwest|Command::new|std::process::Command|tokio::process` 必须 0 命中（doc 注释中的 disclaimer 不算）
