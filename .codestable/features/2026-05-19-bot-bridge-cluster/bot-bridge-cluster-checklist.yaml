@@ -16,7 +16,7 @@ steps:
 
   - action: "编排节点：runner.rs 实装 handle_event（注入 dyn LarkRunner + RunnerRegistry + ActiveRunnerRegistry）+ ADJUST_MAX 循环 + BotAction + HandleEventError"
     exit_signal: "单测用 MockLarkRunner + 假 Runner 注入 + 覆盖 4 outcome (Success / Failed / Aborted / Timeout) + Adjust 重启路径（attempts=1 终态 / attempts 触上限 aborted）；runner kind 未注册路径返 Skipped + journal 落档"
-    status: pending
+    status: done
 
   - action: "持久化 + 接力：paths.rs 加 bot_chat_cache_dir helper；relay_task.rs 实装 record_start / record_end / record_adjust + BOT_CHAT_CACHE_SCHEMA_VERSION=1 + cache 文件 atomic .tmp+rename"
     exit_signal: "单测覆盖同 chat 多次 record_start 写同一 TaskGuid（cache hit）+ cache schema_version 缺失向后兼容 + safe_filename 路径跳出防御 + EndOutcome 四态 step 文案匹配；与已有 bot_task_writer::session_tasks/ 同目录平级不互相干扰"
