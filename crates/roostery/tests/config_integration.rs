@@ -65,6 +65,17 @@ journal:
     let cfg = config::load_from(&path).unwrap();
     assert_eq!(cfg.identity.user_id, "ou_full");
     assert_eq!(cfg.runners.len(), 2);
+    // B6: runners is now BTreeMap<String, RunnerConfig> — `enabled` strongly
+    // typed, `cli_path` / `extra_args` preserved under `extra`.
+    let cc = &cfg.runners["cc_headless"];
+    assert!(cc.enabled);
+    assert_eq!(
+        cc.extra["cli_path"],
+        serde_yml::Value::String("/opt/cc".into())
+    );
+    assert!(cc.extra["extra_args"].is_sequence());
+    let codex = &cfg.runners["codex_exec"];
+    assert!(!codex.enabled);
     assert_eq!(cfg.budgets.default.max_calls, 200);
     assert_eq!(cfg.trace.max_depth, 12);
 

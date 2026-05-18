@@ -31,7 +31,7 @@ pub struct Config {
     #[serde(default)]
     pub identity: Identity,
     #[serde(default)]
-    pub runners: BTreeMap<String, serde_yml::Value>,
+    pub runners: BTreeMap<String, RunnerConfig>,
     #[serde(default)]
     pub budgets: Budgets,
     #[serde(default)]
@@ -51,6 +51,21 @@ impl Default for Config {
             journal: JournalConfig::default(),
         }
     }
+}
+
+/// Per-runner configuration. Known fields are strongly typed (currently just
+/// `enabled`); anything else the user puts under the runner key is preserved
+/// via `#[serde(flatten)]` for downstream Runner impls (Phase 4
+/// `dispatcher-runners`) to interpret. Rust-idiom-first refactor B6
+/// (`.codestable/compound/2026-05-18-decision-rust-idiom-first.md`)
+/// replacing the previous `serde_yml::Value` no-typing-at-all.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct RunnerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_yml::Value>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -255,12 +270,14 @@ mystery_field: 42
     }
 
     #[test]
-    fn runners_open_structure() {
+    fn runners_open_structure_known_field_strongly_typed() {
         let yaml = r#"
 runners:
   cc_headless:
     enabled: true
     cli_path: /usr/local/bin/claude-code
+    extra_args:
+      - --foo
   codex_exec:
     enabled: false
   custom_runner_v3:
@@ -268,11 +285,28 @@ runners:
 "#;
         let cfg: Config = serde_yml::from_str(yaml).unwrap();
         assert_eq!(cfg.runners.len(), 3);
-        assert!(cfg.runners.contains_key("cc_headless"));
-        assert!(cfg.runners.contains_key("custom_runner_v3"));
-        // Values can be inspected as serde_yml::Value
         let cc = &cfg.runners["cc_headless"];
-        assert_eq!(cc["enabled"], serde_yml::Value::Bool(true));
+        // Known field is strongly typed (B6)
+        assert!(cc.enabled);
+        // Unknown fields preserved via #[serde(flatten)]
+        assert_eq!(
+            cc.extra["cli_path"],
+            serde_yml::Value::String("/usr/local/bin/claude-code".into())
+        );
+        assert!(cc.extra["extra_args"].is_sequence());
+
+        let codex = &cfg.runners["codex_exec"];
+        assert!(!codex.enabled);
+        assert!(codex.extra.is_empty());
+
+        // Runner with no `enabled` field gets default false; unknown field
+        // lands in `extra` (open structure preserved per roadmap §4.6).
+        let custom = &cfg.runners["custom_runner_v3"];
+        assert!(!custom.enabled);
+        assert_eq!(
+            custom.extra["arbitrary_key"],
+            serde_yml::Value::String("arbitrary_value".into())
+        );
     }
 
     #[test]
