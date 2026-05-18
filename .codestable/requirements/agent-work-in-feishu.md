@@ -4,7 +4,7 @@ slug: agent-work-in-feishu
 pitch: agent 跑在桌面 / 远程开发机上，飞书里看进度、群里接续讨论——多设备无缝跟进 vibecoding。
 status: draft
 last_reviewed: 2026-05-18
-implemented_by: [2026-05-16-lark-cli-wrapper, 2026-05-17-config-yaml, 2026-05-18-hooks-merge]
+implemented_by: [2026-05-16-lark-cli-wrapper, 2026-05-17-config-yaml, 2026-05-18-hooks-merge, 2026-05-18-roostery-init]
 tags: [feishu, agent, cross-device, vibecoding, observability, dogfood]
 ---
 
@@ -54,6 +54,7 @@ tags: [feishu, agent, cross-device, vibecoding, observability, dogfood]
 
 - 2026-05-15：drafted（初稿落档）
 - 2026-05-15：刷新 vision——把 "多设备 / 跨窗口 vibecoding" 提升为首要 "why"，重写 pitch、加 2 条 cross-device 用户故事、重写 "为什么需要" 段落顺序；A 边界第 3 条软化（"飞书是不可替换组件" → "0.x 只覆盖飞书但底层数据 portable"）以兑现 Roostery 中立中间件的命名意图，跟新立的 `portable-by-default` 互引；加边界第 5 条说明"跨设备同步走飞书侧"
+- **2026-05-18**：`roostery-init` 落地（feature `2026-05-18-roostery-init`），Phase 3 Module D 收尾。陌生开发者首次跑通装机链路——`roostery init` 单命令串起 smoke gate / state dir bootstrap / identity reflect / agent detect / shim install（PATH-prefix 拦截 lark-cli）/ sh bridge / 3-runtime hook merge（cc + codex + gemini）/ `~/.roostery/env` 写 `ROOSTERY_REAL_LARK_CLI` / shell rc marker block 幂等 patch。**这是 req 的"B 用户首次装机入口"**：装好后用户跑 `claude / codex / gemini` Stop hook 自动 fire 到 `roostery dispatcher fire`（Phase 4 dispatcher 起来后真消费，本期 hook 触发会 clap "unknown subcommand" 但 `\|\| true` 吞掉不阻塞 agent）。req 仍保持 `draft`——用户视角"在飞书看到 agent 写什么"要 Phase 5 bot bridge 写 IM thread / 任务卡才兑现。
 - **2026-05-18**：`hooks-merge` 落地（feature `2026-05-18-hooks-merge`），Module D 装机桥接层兑现。3 个 Stop hook 模板（CC + Codex + sh bridge）`include_str!` 编译期嵌入；JSON 深合并按 event key + matcher + command tail 三层幂等去重把 hook 片段注入 `~/.claude/settings.json` / `~/.codex/hooks.json`；env 前缀切到 `ROOSTERY_AGENT=cc/codex`（一次切口径）。**这是 req 的"装机后 agent runtime 触发 hook 进入 Roostery 处理路径"基础设施**：agent 跑完调用 SessionEnd hook → sh bridge 从 stdin 抽 summary → 调 `roostery dispatcher fire`（Phase 4 dispatcher 起来后真正消费）。req 仍保持 `draft`——用户视角"飞书看到 agent 在写什么"还要 Phase 5 bot bridge 兑现
 - **2026-05-17**：`config-yaml` 落地（feature `2026-05-17-config-yaml`），Module D 配置基础层兑现。`Config.identity { user_id, default_chat_id, default_task_app_token }` 三字段是 req 的"用户身份 + 默认任务挂载点"维度的 schema 承诺；`Config.runners` 是 Phase 4 dispatcher 路由不同 agent runtime 的开关位。**这是 req 的可配置性层**：以前 Phase 5 bot bridge 要写飞书任务卡时硬编码"挂哪个群 / 哪个 Base"是 blocker，现在有了配置入口可填。req 仍保持 `draft`——用户视角"跨设备看到 agent 在写什么"还要 Phase 5 bot bridge 真去写 IM thread / 任务卡才兑现
 - **2026-05-16**：`lark-cli-wrapper` 落地（commit `cc44dfa`），Module C 飞书 syscall 通道成型——`LarkRunner` trait + LarkCli subprocess + Journaled 装饰器三件齐备。**这是 req 的基础设施层**：往后 Phase 4 dispatcher / Phase 5 task_writer / bot_bridge 才能开始往飞书任务卡 / IM thread / Docs 评论里真正"贴 agent 工作内容"。req 仍保持 `draft`——用户面端的"跨设备看到 agent 在写什么"还需要 Phase 5 兑现

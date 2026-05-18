@@ -143,9 +143,10 @@ pub enum IdentityError {
     AuthStatusFailed(#[source] LarkError),
     #[error("lark-cli profile list failed: {0}")]
     ProfileListFailed(#[source] LarkError),
-    #[error("auth status JSON missing expected field {field}")]
-    AuthShape { field: &'static str },
 }
+// acceptance 阶段偏差 D1 回填：原列 3 变体含 `AuthShape { field }`；实装合并为 None-tolerant
+// 行为（auth status JSON 缺字段 silent None）。理由：lark-cli auth status JSON 形态有版本
+// 漂移空间，宁可降级 None 也比硬 enum 让 caller 走错路。
 
 /// 主入口：经 LarkRunner 解析当前 identity。
 pub async fn current(runner: &dyn LarkRunner) -> Result<Identity, IdentityError>;
@@ -235,6 +236,11 @@ pub enum OnboardingError {
     HookMergeFailed { agent: AgentKind, #[source] source: HooksError },
     #[error("could not detect $SHELL or shell is unsupported (only zsh/bash)")]
     UnsupportedShell { detected: Option<String> },
+    // acceptance 阶段偏差 D2 回填：实装 +2 边角错误变体
+    #[error("no real `lark-cli` found on PATH (excluding shim target)")]
+    RealLarkCliMissing,
+    #[error("failed to resolve current_exe: {source}")]
+    CurrentExeFailed { #[source] source: io::Error },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -267,6 +273,8 @@ pub struct InitReport {
 pub enum SkipReason {
     NotInstalled,
     UserSkipped,
+    // acceptance 阶段偏差 D3 回填：实装 +1 变体携带原因
+    MergeFailed(String),
 }
 
 pub async fn run(runner: &dyn LarkRunner, opts: InitOptions) -> Result<InitReport, OnboardingError>;
@@ -312,9 +320,9 @@ struct InitArgs {
 
 #### 2.1.7 `crates/roostery/Cargo.toml`（新依赖）
 
-- `which = "6"` — agent_detect 用（轻量，无 transitive heavy deps）
-- `sha2 = "0.10"` — shim hash 比对（已可能传递引入）；若已有则不重复
-- `whoami` — 不需要（用 `std::env::var("HOME")` + `hostname` 走 `nix::unistd::gethostname()`？过 invasive）；改用 `gethostname = "0.4"` crate
+- `which = "7"` — agent_detect 用（轻量，无 transitive heavy deps）；acceptance D5 回填：实装用最新稳定版 7.x（design 原写 "6"，crates.io 已演进到 7）
+- `sha2 = "0.10"` — shim hash 比对；acceptance D4 回填：原 §2.1.7 漏列，但 §2.4 S6 step + §1.5 idiom #3 newtype 已 flag
+- `gethostname = "0.5"` — identity host 字段；acceptance 阶段微调到最新 0.5（原 design 写 0.4）
 
 ### 2.2 编排层（现状 → 变化）
 
@@ -361,7 +369,7 @@ flowchart TD
 3. **shell rc patch 幂等**：marker 注释块存在则跳过（D10）
 4. **每个 agent 独立失败不阻塞其他 agent**：单个 `apply_template` 报错记入 `InitReport` 但继续；末尾若有失败汇总后 exit 非零
 5. **dry-run 模式**：所有 write 操作改为 println，行为副作用为零
-6. **PATH 检查**：装 shim 前 verify `~/.local/bin` 在 PATH 前段；不在则 warn（attention.md 已有约束）
+6. **PATH 检查降级**：原 design 列"装 shim 前 verify `~/.local/bin` 在 PATH 前段，不在则 warn"。**acceptance 偏差回填**：实装阶段评估信噪比不高（macOS GUI process PATH ≠ terminal PATH），降级为 `format_report` 末段 next-step 文字提示"open a new shell or source ~/.roostery/env"
 7. **sh bridge chmod 0755**：可执行位必须有
 
 ### 2.3 挂载点清单（"删了它 feature 是否消失" 判据）

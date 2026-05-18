@@ -424,12 +424,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
    - 主要支持的 req：`runtime-neutral`（接入多 runtime 的入口）
    - 备注：Phase 3；Python 版输出做 golden file，Rust 版必须 byte-for-byte 一致（除非文档另有规定）
 
-10. **`roostery-init`** — `roostery init` 子命令 + identity / agent_detect / 模板嵌入（§4.7）
+10. **`roostery-init`** — `roostery init` 子命令 + identity / agent_detect / 模板嵌入（§4.7） — **done**（feature `2026-05-18-roostery-init`）
     - 所属模块：D
     - 依赖：`hooks-merge`、`lark-cli-shim`
-    - 状态：planned
+    - 状态：**done**（feature `2026-05-18-roostery-init`）
     - 主要支持的 req：**`agent-work-in-feishu`**（B 用户首次装机入口）
-    - 备注：Phase 3；完成后陌生开发者第一次能跑通"装机 + 配 hook + 装 shim"链路（但还不能 E2E 出 task，那要等 Phase 5）
+    - 备注：Phase 3 收尾 feature；3 个新模块 `identity` / `agent_detect` / `onboarding` + 顺手扩 `AgentKind::Gemini` + Gemini stop hook 模板；shim 装 `~/.local/bin/lark-cli`（sha2 hash 比对幂等）；shell rc marker block（`# >>> roostery >>>` / `# <<< roostery <<<`）幂等 patch + `~/.roostery/env` 写 `ROOSTERY_REAL_LARK_CLI`；smoke gate 守门失败零文件副作用；identity 走 `LarkRunner` trait 异步反映 lark-cli profile，失败不阻塞装机；onboarding 模块本期只做 installer，**不**创建 welcome task（推 Phase 5 `bot-stop-hook`）；本 feature 完成 = 陌生开发者跑通"装机 + 配 hook + 装 shim"链路，但 E2E 出 task 仍要等 Phase 5
 
 ### Module E · Dispatcher
 

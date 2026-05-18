@@ -77,7 +77,7 @@ items:
   - slug: roostery-init
     description: roostery init 子命令 + identity / agent_detect / 模板嵌入（§4.7）
     depends_on: [hooks-merge, lark-cli-shim]
-    status: in-progress
+    status: done
     feature: 2026-05-18-roostery-init
     minimal_loop: false
     notes: "Phase 3；完成后陌生开发者第一次能跑通装机链路；尚不能 E2E 出 task"

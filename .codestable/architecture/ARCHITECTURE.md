@@ -48,6 +48,11 @@
 | `hooks_merge` 模块 | Phase 3 落地的 `crates/roostery/src/hooks_merge.rs`（feature `2026-05-18-hooks-merge`）。JSON 深合并把 Stop hook 片段注入 `~/.claude/settings.json` / `~/.codex/hooks.json`，按 event key + matcher + command tail 三层幂等去重；3 个模板用 `include_str!` 编译期嵌入：`CC_STOP_HOOK_JSON` + `CODEX_STOP_HOOK_JSON` + `STOP_HOOK_AGENT_NOTIFY_SH`（roadmap §4.7 兑现首例）；3 公开 fn `render_template` / `merge_event_hook` / `apply_template`；`HooksError` `#[non_exhaustive]` 4 变体；JSON 输出 `indent=2` + `\n` trailing（Python golden file byte-for-byte 除 env 前缀偏离）；atomic `.tmp` + rename |
 | `ROOSTERY_AGENT` env | Stop hook command 拼前缀 `ROOSTERY_AGENT=cc` / `=codex` 让下游 stop bridge sh 识别 runtime；**不沿用** Python `FEISHU_HUB_AGENT`（roadmap items.yaml notes "除非文档另有规定" 明示偏离）。与 `ROOSTERY_HOME` / `ROOSTERY_LARK_CLI_BIN` / `ROOSTERY_REAL_LARK_CLI` / `ROOSTERY_NOJOURNAL` 同 prefix |
 | `src/templates/` 资源文件子目录 | 项目首次引入"非 Rust 源码资源文件子目录"模式（feature `2026-05-18-hooks-merge` 落地）。纯文本资源（.json / .sh），用 `include_str!` 引用，不进 `pub mod` 声明；rust-module-organization decision 拟扩展第 5 档归档 |
+| `Identity` | Phase 3 落地的 `crates/roostery/src/identity.rs`（feature `2026-05-18-roostery-init`）。Immutable snapshot of active lark-cli profile + auth state：`#[non_exhaustive]` struct，7 字段全 `private` + accessor 返 `Option<&str>`（typestate-lite，禁直暴 `Option<String>`）：profile_name / user_open_id / user_name / bot_app_id / brand / token_status / host。method `short_user` / `short_bot` / `is_ready` / `describe`。`pub async fn current(runner: &dyn LarkRunner) -> Result<Identity, IdentityError>`（经 LarkRunner trait 调 `auth status` + `profile list`）；`IdentityError` `#[non_exhaustive]` 2 变体（AuthStatusFailed / ProfileListFailed）。**Roostery 不发明 identity**——只 reflect lark-cli profile，与 `config::Identity { user_id, default_chat_id, default_task_app_token }` 不同维度（一个是运行时 reflect，一个是 schema-defined static）|
+| `AgentSpec` | `crates/roostery/src/agent_detect.rs`（feature `2026-05-18-roostery-init`）。`#[non_exhaustive]` struct + `&'static str` 字段：`kind: AgentKind` / `cli: &'static str` / `hooks_target: &'static str`（未展开 `~/`，consumer 走 `expanded_hooks_target()`）。`pub const AGENTS: &[AgentSpec]` 3 项（Cc/Codex/Gemini）|
+| `AgentKind::Gemini` | `hooks_merge.rs:43` `AgentKind` enum 第 3 变体（hooks-merge 起 cc/codex 二项 + roostery-init 顺手加 gemini）。对应模板 `GEMINI_STOP_HOOK_JSON` `include_str!` 编译期嵌入 `templates/gemini_stop_hook.json`；Gemini CLI 走 `~/.gemini/settings.json` SessionEnd event |
+| `ShellKind` | `onboarding.rs:98`（feature `2026-05-18-roostery-init`）。`#[non_exhaustive]` enum { Zsh, Bash }——其他 shell（fish / nushell）目前不支持。`detect_from_env()` 走 `$SHELL` ends-with 检测；`rc_path()` 返 `~/.zshrc` / `~/.bashrc` |
+| `roostery init` 子命令 | `crates/roostery/src/main.rs Command::Init(InitArgs)`（feature `2026-05-18-roostery-init`）。`--dry-run` + `--skip-agent <AGENT>`（可重复）；handler 起 tokio current_thread runtime block_on `onboarding::run`。装机流水线 9 阶段线性：smoke gate → mkdir state → identity reflect → agent_detect → install_shim（current_exe sibling + sha2 hash 比对幂等）→ write_sh_bridge → merge_hooks per installed agent → write `~/.roostery/env`（含 `export ROOSTERY_REAL_LARK_CLI=<resolved>`）→ patch_shell_rc（marker block `# >>> roostery >>>` / `# <<< roostery <<<` 幂等）→ format_report |
 
 ### State ownership
 
@@ -160,7 +165,20 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 - 设计约束：**不读 env override**（各模块自管，如 `lark_cli/subprocess.rs::ENV_BIN`、`smoke::ENV_BIN` 自管 `ROOSTERY_LARK_CLI_BIN`；config 仅管文件层）；**不实现 schema migration**（v2 落地时走 cs-roadmap update）；**不消费 runners 子结构**（占位给 Phase 4）；**不修改 main.rs**（纯 lib 扩展，无 CLI 子命令变更）
 - 不变量：`load` 文件不存在 → default；atomic save；schema_version 缺失隐式=1；config 不调 redact（不含敏感数据）；`Config::default()` 可 save+load round-trip 等价
 
-- 子 feature：**`config-yaml`（done）** / **`hooks-merge`（done）** / `roostery-init`
+- 子 feature：**`config-yaml`（done）** / **`hooks-merge`（done）** / **`roostery-init`（done）**
+
+**identity / agent_detect / onboarding 模块**（已落地，feature `2026-05-18-roostery-init`，Phase 3 收尾）：
+
+- 三新文件 `crates/roostery/src/{identity,agent_detect,onboarding}.rs`；同模块 `paths.rs` 加 `scripts_dir()` + `env_file()` 两公开 fn；`main.rs` 加 `Command::Init(InitArgs)` 子命令；`hooks_merge.rs` 加 `AgentKind::Gemini` 变体 + `GEMINI_STOP_HOOK_JSON` const + `templates/gemini_stop_hook.json` 第 3 模板
+- 新增依赖 `which = "7"`（PATH walk 探 agent CLI）/ `gethostname = "0.5"`（identity host 字段）/ `sha2 = "0.10"`（shim install 幂等 hash 比对）；无 `reqwest` / HTTP client / 外部 LLM client（架构红线守住）
+- 公开 API：
+  - `identity::current(runner) -> Result<Identity, IdentityError>` async；`Identity::{short_user, short_bot, is_ready, describe, 7 accessor}`
+  - `agent_detect::{AGENTS, detect_all(skip), AgentSpec::expanded_hooks_target, DetectResult::installed}`
+  - `onboarding::{run(runner, opts), format_report, InitOptions, InitReport, ShellKind, OnboardingError 9 变体, SkipReason 3 变体}`
+- 装机流水线 9 阶段（编排见术语表 `roostery init 子命令` 词条）；线性 + 单 agent 失败不阻塞（`SkipReason::MergeFailed(reason)` 汇总）+ identity 失败不阻塞（`(Option<Identity>, Option<IdentityError>)` 主流程二元组）
+- 不变量：smoke 失败 → 文件系统零改动；shim 装机幂等（sha2 hash 比对，相同跳，不同覆盖，非 shim 报错）；shell rc patch 幂等（marker block 检测）；dry-run 模式零副作用；sh bridge chmod 0755；`patch_shell_rc` marker block conda/pyenv 风格（用户可自己 unpatch）
+- 设计约束：**不创建 welcome task / 不调 task_writer**（推 Phase 5 `bot-stop-hook` + `bot-task-writer`）；**不实现 `--force`**（认为"我知道在干什么"语义本期不暴露）；**不读 `FEISHU_HUB_*` legacy env**；**不写 config.yaml**（仅读，找不到用编译期默认）；**不支持 fish / nushell**（`UnsupportedShell` 错误明示）；**不实现 uninstall**（marker block 让用户能手动 unpatch）；**onboarding 模块名沿用 Python 但职责改为纯 installer**（Phase 5 才扩 welcome task；模块顶部 doc-comment 显式说明范围演化避免 git blame 跨期混淆）
+- 测试覆盖：lib 200（含本 feature +26）+ onboarding integ 5（dry-run / smoke NeverRun / smoke LastFailed / full install + idempotent / identity error 不阻塞）+ hooks_merge integ 12（含 Gemini 模板 byte-for-byte）；ENV_LOCK 串行化 HOME/ROOSTERY_HOME/SHELL/PATH 隔离
 
 **hooks_merge 模块**（已落地，feature `2026-05-18-hooks-merge`，Phase 3）：
 
@@ -203,7 +221,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 | 4.4 | `HookEvent` schema | D/E → E | Phase 3-4 |
 | 4.5 | `TraceContext` | E → F → C | Phase 4 |
 | 4.6 | Config schema | D 写 → 所有读 | Phase 3 — **已落地**（feature `2026-05-17-config-yaml`） |
-| 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 — **已落地**（feature `2026-05-18-hooks-merge`） |
+| 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 — **已落地**（feature `2026-05-18-hooks-merge` 立首例 cc+codex 二模板；feature `2026-05-18-roostery-init` 顺手补 gemini 第 3 模板，3 个 `pub const` `include_str!` 编译期嵌入） |
 
 ## 5. 关键架构决定
 
@@ -232,4 +250,5 @@ Feishu Base 作为索引层（**非** source of truth）。
 6. **代码-文档优先级**：Python baseline 与最新文档冲突时**以文档为准**（见 attention.md）。Rust port 不机械 1:1 翻译，失配点记观察项
 7. **redact 模块函数纯且幂等**：`redact::scrub_value` / `scrub_argv` / `scrub_text` 不修改入参（接 `&` 借用返回 owned 新值）；对已含 `MASK` 的输入再跑结果等价；audit path 顺序 = 遍历顺序（Phase 1 落地，commit `1e392e5`）
 8. **journal schema_version=1 公开承诺**：自 journal-core 落地起（commit `b9ac5be`），`JournalEntry` 字段名 / 类型 / 序列化形态变更需 bump version + 兼容旧版 deserialize + `cs-roadmap update` 评估 portable-by-default 影响。`Journal::append` 不内建脱敏，caller 自行用 `redact::scrub_value` 过 `params` 后填入
-9. **`ROOSTERY_AGENT` env 约定**：agent runtime 识别用 `ROOSTERY_AGENT=cc` / `=codex`（Stop hook command 拼前缀），由 stop bridge sh 在 hook fire 时读取传给 `roostery dispatcher fire`；**不沿用** Python `FEISHU_HUB_AGENT`（feature `2026-05-18-hooks-merge` 一次切口径，roadmap items.yaml "除非文档另有规定" 明示偏离）
+9. **`ROOSTERY_AGENT` env 约定**：agent runtime 识别用 `ROOSTERY_AGENT=cc` / `=codex` / `=gemini`（Stop hook command 拼前缀），由 stop bridge sh 在 hook fire 时读取传给 `roostery dispatcher fire`；**不沿用** Python `FEISHU_HUB_AGENT`（feature `2026-05-18-hooks-merge` 一次切口径 cc/codex 立项，feature `2026-05-18-roostery-init` 加 gemini）
+10. **`ROOSTERY_REAL_LARK_CLI` env 持久化路径** = `~/.roostery/env` + shell rc marker block 幂等 append（`# >>> roostery >>>` / `# <<< roostery <<<`，conda/pyenv 风格）。由 feature `2026-05-18-roostery-init` 在 `roostery init` 装机末段写入；用户后续升级 / 切 lark-cli 路径时编辑 `~/.roostery/env` 即可，不必重跑 `roostery init`；marker block 让用户能定位 / unpatch（Roostery 不实装 uninstall）。仅支持 zsh / bash（fish / nushell `UnsupportedShell` 拒绝）

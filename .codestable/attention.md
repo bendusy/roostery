@@ -25,7 +25,7 @@
 
 - 飞书 API **必经 `lark-cli`**（`lark_cli.py` / `lark_cli.rs` subprocess wrapper）——不允许直接 `requests` / `reqwest` / 任何 HTTP client 打 `open.feishu.cn`，也不允许引 Feishu SDK；架构红线，code review 拒收
 - agent runtime 的 Stop hook 安装走 `roostery init`（Rust 期 hooks_merge feature），**不要手动编辑** `~/.claude/settings.json` / `~/.codex/hooks.json` 注入——会跟下次 init 的深合并冲突
-- Rust `#[non_exhaustive]` struct 从外部 crate **完全不允许** struct literal——包括 `..Default::default()` 也会触发 rustc E0639。必须配 builder API（参考 `RunOptions::new().with_timeout(d)`）；新引入 non_exhaustive 容器 struct 时同时加 `new() + with_*` 链不要假设 `..Default::default()` 旁路
+- Rust `#[non_exhaustive]` struct 从外部 crate **完全不允许** struct literal——包括 `..Default::default()` 也会触发 rustc E0639。必须配 builder API（参考 `RunOptions::new().with_timeout(d)`）；新引入 non_exhaustive 容器 struct 时同时加 `new() + with_*` 链不要假设 `..Default::default()` 旁路。**测试 fixture 侧 corollary**（跨 crate integ test 想预置 non_exhaustive 类型作为 seed 时）：用 `serde_json::from_str` 反序列化 JSON 字面量绕过（如 `tests/onboarding_integration.rs::seed_passing_smoke` 写 raw JSON 到 `~/.roostery/state/smoke.json`），或挑非 non_exhaustive 的 enum variant 作为代表（`LarkError::Timeout { timeout_ms }` 比 `NonZeroExit` 更易构造）
 
 ### 路径与目录约定
 
