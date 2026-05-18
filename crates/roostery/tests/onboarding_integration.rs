@@ -156,6 +156,7 @@ async fn dry_run_passes_with_passing_smoke_and_does_not_write() {
         InitOptions {
             dry_run: true,
             skip_agents: vec![],
+            real_lark_cli_override: None,
         },
     )
     .await
@@ -189,6 +190,7 @@ async fn smoke_never_run_aborts_without_writing() {
         InitOptions {
             dry_run: false,
             skip_agents: vec![],
+            real_lark_cli_override: None,
         },
     )
     .await;
@@ -197,6 +199,37 @@ async fn smoke_never_run_aborts_without_writing() {
     // Filesystem must be untouched.
     assert!(!env.home.path().join(".local/bin/lark-cli").exists());
     assert!(!env.roostery_home().join("scripts").exists());
+    assert!(!env.home.path().join(".zshrc").exists());
+}
+
+/// S4 new test: resolve fails (OverrideInvalid) AFTER smoke gate → zero
+/// filesystem side effects (no shim copied / no scripts written / no hook
+/// merged / no env file / no shell rc patched). Verifies the early-gate
+/// position of resolve_real_lark_cli (design §2.2 + §3 E3).
+#[tokio::test]
+async fn resolve_fail_leaves_zero_side_effects() {
+    let env = TestEnv::new();
+    seed_passing_smoke(&env.roostery_home());
+    ensure_fake_shim_sibling();
+    let mock = happy_identity_mock();
+
+    let result = onboarding::run(
+        &mock,
+        InitOptions {
+            dry_run: false,
+            skip_agents: vec![],
+            real_lark_cli_override: Some(PathBuf::from("/definitely/nowhere/lark-cli")),
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "OverrideInvalid expected");
+    // Filesystem totally untouched outside seed (smoke.json was seeded
+    // before calling run; everything else must be absent).
+    assert!(!env.home.path().join(".local/bin/lark-cli").exists());
+    assert!(!env.roostery_home().join("scripts").exists());
+    assert!(!env.roostery_home().join("journal").exists());
+    assert!(!env.roostery_home().join("env").exists());
     assert!(!env.home.path().join(".zshrc").exists());
 }
 
@@ -212,6 +245,7 @@ async fn smoke_last_failed_aborts() {
         InitOptions {
             dry_run: false,
             skip_agents: vec![],
+            real_lark_cli_override: None,
         },
     )
     .await;
@@ -236,6 +270,7 @@ async fn full_install_writes_expected_files_and_is_idempotent() {
             // installs on the host (and there is no `claude` binary on PATH
             // in CI anyway, so they'd be NotInstalled).
             skip_agents: vec![AgentKind::Cc, AgentKind::Codex, AgentKind::Gemini],
+            real_lark_cli_override: None,
         },
     )
     .await
@@ -275,6 +310,7 @@ async fn full_install_writes_expected_files_and_is_idempotent() {
         InitOptions {
             dry_run: false,
             skip_agents: vec![AgentKind::Cc, AgentKind::Codex, AgentKind::Gemini],
+            real_lark_cli_override: None,
         },
     )
     .await
@@ -306,6 +342,7 @@ async fn identity_failure_does_not_abort_install() {
         InitOptions {
             dry_run: false,
             skip_agents: vec![AgentKind::Cc, AgentKind::Codex, AgentKind::Gemini],
+            real_lark_cli_override: None,
         },
     )
     .await
@@ -314,4 +351,122 @@ async fn identity_failure_does_not_abort_install() {
     assert!(report.identity.is_none());
     assert!(report.identity_error.is_some());
     assert!(env.home.path().join(".local/bin/lark-cli").exists());
+}
+
+// ============================================================================
+// S6: feature 2026-05-18-init-real-lark-cli-override e2e CLI tests
+// ============================================================================
+
+/// E2E #1: --real-lark-cli flag → init 跑通；env 文件指向 override；source=Flag
+#[tokio::test]
+async fn override_flag_happy_writes_env_pointing_to_override_path() {
+    let env = TestEnv::new();
+    seed_passing_smoke(&env.roostery_home());
+    ensure_fake_shim_sibling();
+    // 制造一个不在 PATH 上的 fake real lark-cli（区分 TestEnv 默认那个）
+    let extra_dir = tempfile::tempdir().unwrap();
+    let override_path = ensure_fake_real_lark_cli(extra_dir.path());
+    let mock = happy_identity_mock();
+
+    let report = onboarding::run(
+        &mock,
+        InitOptions {
+            dry_run: false,
+            skip_agents: vec![AgentKind::Cc, AgentKind::Codex, AgentKind::Gemini],
+            real_lark_cli_override: Some(override_path.clone()),
+        },
+    )
+    .await
+    .expect("flag override happy path");
+
+    assert_eq!(report.real_lark_cli, override_path);
+    assert_eq!(
+        report.real_lark_cli_source,
+        onboarding::RealLarkCliSource::Flag
+    );
+    let env_body = fs::read_to_string(env.roostery_home().join("env")).unwrap();
+    assert!(
+        env_body.contains(&format!(
+            "export ROOSTERY_REAL_LARK_CLI={}",
+            override_path.display()
+        )),
+        "env file should contain override path; got: {env_body}"
+    );
+}
+
+/// E2E #2: ROOSTERY_LARK_CLI_BIN env → init 跑通；source=Env
+#[tokio::test]
+async fn override_env_happy_uses_env_value() {
+    let env = TestEnv::new();
+    seed_passing_smoke(&env.roostery_home());
+    ensure_fake_shim_sibling();
+    let extra_dir = tempfile::tempdir().unwrap();
+    let env_target = ensure_fake_real_lark_cli(extra_dir.path());
+
+    let prev_bin_env = std::env::var("ROOSTERY_LARK_CLI_BIN").ok();
+    unsafe { std::env::set_var("ROOSTERY_LARK_CLI_BIN", &env_target) };
+
+    let mock = happy_identity_mock();
+    let report = onboarding::run(
+        &mock,
+        InitOptions {
+            dry_run: false,
+            skip_agents: vec![AgentKind::Cc, AgentKind::Codex, AgentKind::Gemini],
+            real_lark_cli_override: None,
+        },
+    )
+    .await
+    .expect("env override happy path");
+
+    assert_eq!(report.real_lark_cli, env_target);
+    assert_eq!(
+        report.real_lark_cli_source,
+        onboarding::RealLarkCliSource::Env
+    );
+
+    // Restore env
+    unsafe {
+        match prev_bin_env {
+            Some(v) => std::env::set_var("ROOSTERY_LARK_CLI_BIN", v),
+            None => std::env::remove_var("ROOSTERY_LARK_CLI_BIN"),
+        }
+    }
+}
+
+/// E2E #3: PATH 唯一候选 = shim target → LarkCliCollidesShimTarget + 零副作用
+#[tokio::test]
+async fn collision_returns_error_and_leaves_zero_side_effects() {
+    let env = TestEnv::new();
+    seed_passing_smoke(&env.roostery_home());
+    ensure_fake_shim_sibling();
+
+    // 在 TestEnv 的 HOME/.local/bin/ 放一个 fake lark-cli（即 shim target 路径）。
+    // 并把 PATH 完全替换成那一个目录，让 which 只返还这一个候选 = shim_target → collision。
+    let shim_target_dir = env.home.path().join(".local/bin");
+    let shim_target = ensure_fake_real_lark_cli(&shim_target_dir);
+    unsafe { std::env::set_var("PATH", &shim_target_dir) };
+
+    let mock = happy_identity_mock();
+    let result = onboarding::run(
+        &mock,
+        InitOptions {
+            dry_run: false,
+            skip_agents: vec![AgentKind::Cc, AgentKind::Codex, AgentKind::Gemini],
+            real_lark_cli_override: None,
+        },
+    )
+    .await;
+
+    assert!(result.is_err(), "expected LarkCliCollidesShimTarget");
+    // 重要：fake lark-cli **预先存在**（我们刚写的）；零副作用断言意指 init 没有把 shim 装上去
+    // 覆盖那个 fake。验证文件内容仍是 fake 的 `#!/bin/sh\necho fake\n`，不是 shim binary
+    let body = fs::read_to_string(&shim_target).unwrap();
+    assert!(
+        body.contains("echo fake"),
+        "fake lark-cli content must remain (shim must NOT have overwritten it); got: {body:?}"
+    );
+    // 其他 init 产物均未生成
+    assert!(!env.roostery_home().join("scripts").exists());
+    assert!(!env.roostery_home().join("env").exists());
+    assert!(!env.home.path().join(".zshrc").exists());
 }

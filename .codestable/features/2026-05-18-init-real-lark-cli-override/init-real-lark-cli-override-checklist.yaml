@@ -1,0 +1,156 @@
+feature: 2026-05-18-init-real-lark-cli-override
+created: 2026-05-18
+
+steps:
+  - action: "S1 类型骨架：OnboardingError 删 RealLarkCliMissing + 加 LarkCliNotInPath / LarkCliCollidesShimTarget { found_at, shim_target } / OverrideInvalid { path, reason: &'static str } 三 sub-variant（thiserror Display 含 fix hint 文案）；RealLarkCliSource enum { Flag, Env, PathDetected } #[non_exhaustive]；InitOptions 加 real_lark_cli_override: Option<PathBuf>（Default = None）；InitReport 加 real_lark_cli_source: RealLarkCliSource；InitArgs 加 #[arg(long, value_name = \"PATH\")] real_lark_cli: Option<PathBuf>；validate_override / resolve_real_lark_cli 新签名 todo!() 占位"
+    exit_signal: "cargo build 全绿；类型 trivial 单测 3 条（OnboardingError 3 变体 Display 文案含 hint / RealLarkCliSource snake_case Debug / InitOptions Default real_lark_cli_override = None）"
+    status: done
+
+  - action: "S2 validate_override 实现：fn validate_override(path: &Path) -> Result<(), OnboardingError>；检查 path.exists()（不存在 → OverrideInvalid reason=\"missing\"）+ !path.is_dir()（是目录 → reason=\"is a directory\"）；不检查 unix execute bit（U1 决定）"
+    exit_signal: "4 单测（普通文件 Ok / 不存在 missing / 是目录 is a directory / 相对路径相对 cwd 校验）"
+    status: done
+
+  - action: "S3 resolve_real_lark_cli 三层链：新签名 (shim_target: &Path, override_path: Option<&Path>) -> Result<(PathBuf, RealLarkCliSource), OnboardingError>；优先级 1) override_path Some → validate_override + Source::Flag 2) env ROOSTERY_LARK_CLI_BIN 非空 → validate_override + Source::Env 3) which::which_all 第一非 shim_target 候选 → Source::PathDetected 4) 0 候选 → LarkCliNotInPath 5) 所有候选 = shim_target → LarkCliCollidesShimTarget { found_at: candidates[0], shim_target }"
+    exit_signal: "7 集成单测（flag-only / env-only / flag-wins-over-env / PATH-only-non-shim / PATH-multi-first-non-shim / 0-candidates / shim-collision），含 TEST_ENV_LOCK 串行化"
+    status: done
+
+  - action: "S4 onboarding::run 调用点上移：把 shim_target = home_join(SHIM_TARGET_RELATIVE) + resolve_real_lark_cli 移到 F1 smoke gate 之后立刻（F3 identity 之前）；用 opts.real_lark_cli_override.as_deref() 喂 resolve；resolve 返还 tuple 解构成局部变量 real_lark_cli / real_lark_cli_source；L205 原调用点删除，write_env_file(&paths::env_file(), &real_lark_cli) 直接用局部变量；InitReport 构造加 real_lark_cli_source 字段"
+    exit_signal: "现有 onboarding 16 lib 单测 + 5 integration test 全绿；新加 1 integration test：resolve fail 时 ~/.local/bin/lark-cli / ~/.roostery/scripts / agent settings 零文件副作用"
+    status: done
+
+  - action: "S5 CLI 接线：main.rs InitArgs 加 real_lark_cli: Option<PathBuf>（clap derive #[arg(long, value_name = \"PATH\")] + help 文档串接），run_init 把 args.real_lark_cli 翻成 InitOptions.real_lark_cli_override；--help 输出含 --real-lark-cli 文档"
+    exit_signal: "cargo run -- init --help 显示 --real-lark-cli flag；clap parse 单测 1 条（PushCliWrapper 风格 try_parse_from）"
+    status: done
+
+  - action: "S6 CLI 集成测试：扩 tests/onboarding_integration.rs 4 条 e2e（flag override happy / env override happy / collision 零副作用 / override-invalid 零副作用）；mock lark-cli 脚本走现有 fixture_script 模式；TEST_ENV_LOCK 共享锁串行"
+    exit_signal: "cargo test --test onboarding_integration 全绿（含新 4 + 原 5 = 9 条）"
+    status: done
+
+  - action: "S7 InitReport 输出：onboarding::format_report 加一行 'real lark-cli: {path} (from {source})'；source Display 走 snake_case Flag/Env/PathDetected（or via derive）"
+    exit_signal: "format_report 输出含 real lark-cli 行；1 单测 snapshot 验证"
+    status: done
+
+  - action: "S8 完整验收 + 守护 grep + CI：fmt + clippy --all-targets --all-features -- -D warnings + test --all + test --doc 四绿；守护 grep N1-N6（无 ROOSTERY_REAL_LARK_CLI_BIN 新 env / 无 --shim-target flag / 无 reqwest 直连 / OnboardingError 删 RealLarkCliMissing / shim binary 零 diff / lark_cli/subprocess.rs 零 diff）；推 CI 验三 job"
+    exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 全 0"
+    status: done
+
+checks:
+  - item: "InitArgs 加 real_lark_cli: Option<PathBuf> + #[arg(long, value_name=\"PATH\")] 注解"
+    source: 名词契约
+    status: done
+
+  - item: "InitOptions 加 real_lark_cli_override: Option<PathBuf>；Default = None"
+    source: 名词契约
+    status: done
+
+  - item: "InitReport 加 real_lark_cli_source: RealLarkCliSource"
+    source: 名词契约
+    status: done
+
+  - item: "RealLarkCliSource 3 变体（Flag / Env / PathDetected）+ #[non_exhaustive]"
+    source: 名词契约
+    status: done
+
+  - item: "OnboardingError 删 RealLarkCliMissing + 加 LarkCliNotInPath / LarkCliCollidesShimTarget / OverrideInvalid 三变体；每条 Display 文案含 fix hint（--real-lark-cli 或 ROOSTERY_LARK_CLI_BIN）"
+    source: 名词契约
+    status: done
+
+  - item: "resolve_real_lark_cli 新签名 (&Path, Option<&Path>) -> Result<(PathBuf, RealLarkCliSource), OnboardingError>"
+    source: 名词契约
+    status: done
+
+  - item: "validate_override 检查 exists + !is_dir；不检查 unix execute（U1）"
+    source: 计算层
+    status: done
+
+  - item: "onboarding::run 调用 resolve_real_lark_cli 行号 < bootstrap_dirs / install_shim 行号（resolve 在 F1 之后立刻、写操作之前）"
+    source: 编排层
+    status: done
+
+  - item: "Cargo.toml 0 新增依赖"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 1：不引入 ROOSTERY_REAL_LARK_CLI_BIN 新 env（grep crates/roostery/src/ 为 0）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 2：不改 lark_cli/subprocess.rs ROOSTERY_LARK_CLI_BIN 语义（diff 为 0）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 3：不改 shim binary（crates/roostery/src/bin/shim.rs diff 为 0）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 4：不引入 --shim-target flag（grep main.rs InitArgs 字段名为 0）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 5：resolve 失败零文件副作用（integration test 断言 ~/.local/bin/lark-cli / ~/.roostery/scripts / ~/.claude/settings.json 都未被改动）"
+    source: 流程级约束
+    status: done
+
+  - item: "不变量 6：dry-run 与 live 错误信息一致（同 OnboardingError variant + 同 Display 文案）"
+    source: 流程级约束
+    status: done
+
+  - item: "A1 --real-lark-cli flag → env file 含正确 path + source=Flag"
+    source: 验收契约
+    status: done
+
+  - item: "A2 ROOSTERY_LARK_CLI_BIN env → env file 含正确 path + source=Env"
+    source: 验收契约
+    status: done
+
+  - item: "A3 flag + env 都设 → flag 赢；env 静默忽略不报 warning"
+    source: 验收契约
+    status: done
+
+  - item: "A4 PATH 单候选非 shim → source=PathDetected"
+    source: 验收契约
+    status: done
+
+  - item: "A5 PATH 多候选取非 shim_target 第一个 → source=PathDetected"
+    source: 验收契约
+    status: done
+
+  - item: "B1 flag 路径 = shim target → 允许（shim 自递归留观察项 O2，本 feature 不防）"
+    source: 验收契约
+    status: done
+
+  - item: "B4 dry-run + override → resolve 路径走相同；不写文件"
+    source: 验收契约
+    status: done
+
+  - item: "B5 env 空字符串 → 视为未设；走下一层"
+    source: 验收契约
+    status: done
+
+  - item: "E1 0 候选 → LarkCliNotInPath；零文件副作用"
+    source: 验收契约
+    status: done
+
+  - item: "E2 collision → LarkCliCollidesShimTarget { found_at, shim_target }；零文件副作用"
+    source: 验收契约
+    status: done
+
+  - item: "E3 flag 不存在 → OverrideInvalid reason=missing；零文件副作用"
+    source: 验收契约
+    status: done
+
+  - item: "E4 flag 是目录 → OverrideInvalid reason=\"is a directory\"；零文件副作用"
+    source: 验收契约
+    status: done
+
+  - item: "E5 dry-run + 错误路径 → 与 live 同样 Err；零副作用"
+    source: 验收契约
+    status: done
+
+  - item: "本地 cargo fmt --check + clippy -D warnings + test --all + test --doc 全绿"
+    source: 流程级约束
+    status: done
+
+  - item: "远端 CI 三 job 全绿"
+    source: 流程级约束
+    status: done

@@ -82,10 +82,21 @@ pub enum OnboardingError {
     )]
     UnsupportedShell { detected: Option<String> },
     #[error(
-        "no real `lark-cli` found on PATH (excluding shim target); \
-         install lark-cli and ensure it is on PATH before running `roostery init`"
+        "no `lark-cli` found on PATH; install it (e.g. `npm install -g @larksuite/cli`) \
+         or pass `--real-lark-cli <path>` / set `ROOSTERY_LARK_CLI_BIN` env"
     )]
-    RealLarkCliMissing,
+    LarkCliNotInPath,
+    #[error(
+        "only `lark-cli` candidate on PATH is the shim install target ({shim_target}); \
+         pass `--real-lark-cli <path>` or set `ROOSTERY_LARK_CLI_BIN` env to the \
+         real binary path (note: `found_at` == `shim_target` = {found_at})"
+    )]
+    LarkCliCollidesShimTarget {
+        found_at: PathBuf,
+        shim_target: PathBuf,
+    },
+    #[error("real lark-cli override at {path} is invalid: {reason}")]
+    OverrideInvalid { path: PathBuf, reason: &'static str },
     #[error("failed to resolve current_exe: {source}")]
     CurrentExeFailed {
         #[source]
@@ -135,6 +146,31 @@ pub enum SkipReason {
 pub struct InitOptions {
     pub dry_run: bool,
     pub skip_agents: Vec<AgentKind>,
+    /// 显式指定真 lark-cli 路径，跳过 PATH 搜索；优先级最高。
+    /// `None` → 读 `ROOSTERY_LARK_CLI_BIN` env → PATH 搜索。
+    pub real_lark_cli_override: Option<PathBuf>,
+}
+
+/// `InitReport.real_lark_cli` 的来源——让 `format_report` 显式输出走的哪条 path。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RealLarkCliSource {
+    /// 来自 `InitOptions.real_lark_cli_override`（一般经 `--real-lark-cli` flag）
+    Flag,
+    /// 来自 `ROOSTERY_LARK_CLI_BIN` env
+    Env,
+    /// 来自 PATH 搜索（`which::which_all` 排 shim_target 后第一个候选）
+    PathDetected,
+}
+
+impl std::fmt::Display for RealLarkCliSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            RealLarkCliSource::Flag => "flag",
+            RealLarkCliSource::Env => "env",
+            RealLarkCliSource::PathDetected => "path",
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -146,6 +182,7 @@ pub struct InitReport {
     pub shim_path: PathBuf,
     pub shell_rc_patched: Option<PathBuf>,
     pub real_lark_cli: PathBuf,
+    pub real_lark_cli_source: RealLarkCliSource,
     pub dry_run: bool,
 }
 
@@ -165,6 +202,13 @@ pub async fn run(
 ) -> Result<InitReport, OnboardingError> {
     // F1: smoke gate. Failure → no filesystem mutation.
     smoke::ensure_ready()?;
+
+    // **Early-gate resolve**（design §2.2）：F1 之后第一时间解析真 lark-cli。
+    // 任一失败路径（无候选 / shim_target 碰撞 / override 无效）都在写文件之前返还
+    // → 与 smoke gate 同样"失败零文件副作用"语义。修了原 L205 fail-late 留破损态 bug。
+    let shim_target = home_join(SHIM_TARGET_RELATIVE)?;
+    let (real_lark_cli, real_lark_cli_source) =
+        resolve_real_lark_cli(&shim_target, opts.real_lark_cli_override.as_deref())?;
 
     // F3: identity (non-fatal).
     let (identity_snapshot, identity_error) = match identity::current(runner).await {
@@ -187,7 +231,6 @@ pub async fn run(
     }
 
     // F5: install shim.
-    let shim_target = home_join(SHIM_TARGET_RELATIVE)?;
     if !opts.dry_run {
         install_shim(&shim_target)?;
     }
@@ -201,8 +244,7 @@ pub async fn run(
     // F7: merge hooks per installed agent (single-agent failure isolated).
     let (installed, skipped) = merge_hooks_for(&detections, &sh_path, &opts);
 
-    // env file + F8 shell rc patch — only if we have a real lark-cli to point to.
-    let real_lark_cli = resolve_real_lark_cli(&shim_target)?;
+    // F8 env file + shell rc patch — real_lark_cli 已在 early gate 解出。
     if !opts.dry_run {
         write_env_file(&paths::env_file(), &real_lark_cli)?;
     }
@@ -229,6 +271,7 @@ pub async fn run(
         shim_path: shim_target,
         shell_rc_patched,
         real_lark_cli,
+        real_lark_cli_source,
         dry_run: opts.dry_run,
     })
 }
@@ -414,16 +457,70 @@ fn merge_hooks_for(
 
 /// Resolve the real `lark-cli` binary to point the shim at, excluding the
 /// shim itself (target file).
-fn resolve_real_lark_cli(shim_target: &Path) -> Result<PathBuf, OnboardingError> {
-    let candidates =
-        which::which_all("lark-cli").map_err(|_| OnboardingError::RealLarkCliMissing)?;
-    for p in candidates {
-        if p == shim_target {
-            continue;
-        }
-        return Ok(p);
+/// 三层链解析真 lark-cli 路径：override (flag) > env `ROOSTERY_LARK_CLI_BIN` >
+/// PATH 搜索（`which::which_all` 排 shim_target）。
+///
+/// 返还 `(path, source)` 让 caller 写 `InitReport.real_lark_cli_source`，
+/// `format_report` 输出"from {source}"让用户知道走的哪条路径。
+///
+/// 失败分 3 子情形：
+/// - PATH 上 0 候选且无 override → `LarkCliNotInPath`
+/// - PATH 上唯一候选 = shim_target（npm prefix 撞 shim target 经典场景）→
+///   `LarkCliCollidesShimTarget { found_at, shim_target }`
+/// - override 路径不存在或是目录 → `OverrideInvalid { path, reason }`
+fn resolve_real_lark_cli(
+    shim_target: &Path,
+    override_path: Option<&Path>,
+) -> Result<(PathBuf, RealLarkCliSource), OnboardingError> {
+    // 1. flag override
+    if let Some(p) = override_path {
+        validate_override(p)?;
+        return Ok((p.to_path_buf(), RealLarkCliSource::Flag));
     }
-    Err(OnboardingError::RealLarkCliMissing)
+    // 2. env override（ROOSTERY_LARK_CLI_BIN 与 runtime LarkCli subprocess 复用同一 env，
+    //    design §1.2 D1。空字符串视为未设；走下一层。）
+    if let Ok(s) = std::env::var("ROOSTERY_LARK_CLI_BIN")
+        && !s.is_empty()
+    {
+        let p = PathBuf::from(s);
+        validate_override(&p)?;
+        return Ok((p, RealLarkCliSource::Env));
+    }
+    // 3. PATH search via which::which_all，排 shim_target
+    let candidates: Vec<PathBuf> = match which::which_all("lark-cli") {
+        Ok(iter) => iter.collect(),
+        Err(_) => return Err(OnboardingError::LarkCliNotInPath),
+    };
+    if candidates.is_empty() {
+        return Err(OnboardingError::LarkCliNotInPath);
+    }
+    for p in &candidates {
+        if p != shim_target {
+            return Ok((p.clone(), RealLarkCliSource::PathDetected));
+        }
+    }
+    // 所有候选 == shim_target → npm prefix 撞 shim target 经典场景
+    Err(OnboardingError::LarkCliCollidesShimTarget {
+        found_at: candidates[0].clone(),
+        shim_target: shim_target.to_path_buf(),
+    })
+}
+
+/// 校验 override 路径：存在 + 不是目录。不查 unix execute bit（design §5 U1）。
+fn validate_override(path: &Path) -> Result<(), OnboardingError> {
+    if !path.exists() {
+        return Err(OnboardingError::OverrideInvalid {
+            path: path.to_path_buf(),
+            reason: "missing",
+        });
+    }
+    if path.is_dir() {
+        return Err(OnboardingError::OverrideInvalid {
+            path: path.to_path_buf(),
+            reason: "is a directory",
+        });
+    }
+    Ok(())
 }
 
 fn write_env_file(path: &Path, real_lark_cli: &Path) -> Result<(), OnboardingError> {
@@ -499,7 +596,11 @@ pub fn format_report(report: &InitReport) -> String {
         (None, None) => {}
     }
     out.push_str(&format!("  shim:     {}\n", report.shim_path.display()));
-    out.push_str(&format!("  real:     {}\n", report.real_lark_cli.display()));
+    out.push_str(&format!(
+        "  real:     {} (from {})\n",
+        report.real_lark_cli.display(),
+        report.real_lark_cli_source,
+    ));
     if let Some(rc) = &report.shell_rc_patched {
         out.push_str(&format!("  rc:       {}\n", rc.display()));
     }
@@ -533,9 +634,244 @@ mod tests {
     use super::*;
     use crate::paths::TEST_ENV_LOCK as ENV_LOCK;
 
+    // ----- S1 type-skeleton trivial tests --------------------------------
+
+    #[test]
+    fn onboarding_error_three_sub_variants_carry_fix_hint() {
+        let e1 = OnboardingError::LarkCliNotInPath;
+        let s1 = e1.to_string();
+        assert!(
+            s1.contains("--real-lark-cli") && s1.contains("ROOSTERY_LARK_CLI_BIN"),
+            "LarkCliNotInPath should hint both flag + env: {s1}"
+        );
+
+        let e2 = OnboardingError::LarkCliCollidesShimTarget {
+            found_at: PathBuf::from("/home/u/.local/bin/lark-cli"),
+            shim_target: PathBuf::from("/home/u/.local/bin/lark-cli"),
+        };
+        let s2 = e2.to_string();
+        assert!(
+            s2.contains("--real-lark-cli") && s2.contains("ROOSTERY_LARK_CLI_BIN"),
+            "LarkCliCollidesShimTarget should hint flag + env: {s2}"
+        );
+        assert!(s2.contains("/home/u/.local/bin/lark-cli"));
+
+        let e3 = OnboardingError::OverrideInvalid {
+            path: PathBuf::from("/not/exists"),
+            reason: "missing",
+        };
+        let s3 = e3.to_string();
+        assert!(s3.contains("/not/exists") && s3.contains("missing"));
+    }
+
+    #[test]
+    fn real_lark_cli_source_display_is_lowercase() {
+        assert_eq!(RealLarkCliSource::Flag.to_string(), "flag");
+        assert_eq!(RealLarkCliSource::Env.to_string(), "env");
+        assert_eq!(RealLarkCliSource::PathDetected.to_string(), "path");
+    }
+
+    // ----- S2 validate_override tests -----------------------------------
+
+    #[test]
+    fn validate_override_accepts_existing_regular_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        assert!(validate_override(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn validate_override_missing_path_returns_missing() {
+        let err =
+            validate_override(Path::new("/definitely/not/here/lark-cli")).expect_err("missing");
+        match err {
+            OnboardingError::OverrideInvalid { reason, .. } => assert_eq!(reason, "missing"),
+            other => panic!("expected OverrideInvalid::missing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_override_directory_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = validate_override(dir.path()).expect_err("dir");
+        match err {
+            OnboardingError::OverrideInvalid { reason, .. } => {
+                assert_eq!(reason, "is a directory")
+            }
+            other => panic!("expected OverrideInvalid::is a directory, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_override_relative_path_relative_to_cwd() {
+        // 写一个 cwd 内的临时文件名，验 path.exists() 走相对 cwd
+        let cwd = std::env::current_dir().unwrap();
+        let tmp = tempfile::NamedTempFile::new_in(&cwd).unwrap();
+        let rel = tmp.path().file_name().unwrap();
+        let rel_path = Path::new(rel);
+        assert!(
+            validate_override(rel_path).is_ok(),
+            "relative path should validate"
+        );
+    }
+
+    // ----- S3 resolve_real_lark_cli three-tier chain tests ---------------
+
+    /// 制造一个临时目录 + 内含可执行 "lark-cli" 脚本，返还 (tempdir, path)。
+    /// caller 保留 tempdir 让其活到测试结束。
+    fn make_fake_lark_cli(dir: &tempfile::TempDir, name: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mut perm = std::fs::metadata(&path).unwrap().permissions();
+            perm.set_mode(0o755);
+            std::fs::set_permissions(&path, perm).unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn resolve_flag_only_short_circuits() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+        let dir = tempfile::tempdir().unwrap();
+        let fake = make_fake_lark_cli(&dir, "lark-cli");
+        let shim_target = Path::new("/tmp/nowhere/lark-cli");
+        let (path, source) = resolve_real_lark_cli(shim_target, Some(&fake)).unwrap();
+        assert_eq!(path, fake);
+        assert_eq!(source, RealLarkCliSource::Flag);
+    }
+
+    #[test]
+    fn resolve_env_only() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let fake = make_fake_lark_cli(&dir, "lark-cli");
+        unsafe { std::env::set_var("ROOSTERY_LARK_CLI_BIN", &fake) };
+        let shim_target = Path::new("/tmp/nowhere/lark-cli");
+        let (path, source) = resolve_real_lark_cli(shim_target, None).unwrap();
+        assert_eq!(path, fake);
+        assert_eq!(source, RealLarkCliSource::Env);
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+    }
+
+    #[test]
+    fn resolve_flag_wins_over_env() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let fake_env = make_fake_lark_cli(&dir, "lark-cli-env");
+        let fake_flag = make_fake_lark_cli(&dir, "lark-cli-flag");
+        unsafe { std::env::set_var("ROOSTERY_LARK_CLI_BIN", &fake_env) };
+        let shim_target = Path::new("/tmp/nowhere/lark-cli");
+        let (path, source) = resolve_real_lark_cli(shim_target, Some(&fake_flag)).unwrap();
+        assert_eq!(path, fake_flag, "flag wins");
+        assert_eq!(source, RealLarkCliSource::Flag);
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+    }
+
+    #[test]
+    fn resolve_path_detected_non_shim_candidate() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+        let dir = tempfile::tempdir().unwrap();
+        let fake = make_fake_lark_cli(&dir, "lark-cli");
+        // **完全替换** PATH 为孤立 tempdir，避免被其他系统位置的 lark-cli 干扰
+        let prev_path = std::env::var("PATH").unwrap_or_default();
+        unsafe { std::env::set_var("PATH", dir.path()) };
+        let shim_target = Path::new("/tmp/nowhere/lark-cli");
+        let (path, source) = resolve_real_lark_cli(shim_target, None).unwrap();
+        assert_eq!(path.file_name(), fake.file_name());
+        assert_eq!(source, RealLarkCliSource::PathDetected);
+        unsafe { std::env::set_var("PATH", prev_path) };
+    }
+
+    #[test]
+    fn resolve_zero_candidates_returns_not_in_path() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+        let prev_path = std::env::var("PATH").unwrap_or_default();
+        // PATH 设为只含空目录
+        let empty = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("PATH", empty.path()) };
+        let shim_target = Path::new("/tmp/nowhere/lark-cli");
+        let err = resolve_real_lark_cli(shim_target, None).expect_err("0 candidates");
+        assert!(matches!(err, OnboardingError::LarkCliNotInPath));
+        unsafe { std::env::set_var("PATH", prev_path) };
+    }
+
+    #[test]
+    fn resolve_collision_returns_shim_target_variant() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+        let dir = tempfile::tempdir().unwrap();
+        let fake = make_fake_lark_cli(&dir, "lark-cli");
+        // **完全替换** PATH 为孤立 tempdir，让 which::which_all 只返还 fake 一个候选
+        let prev_path = std::env::var("PATH").unwrap_or_default();
+        unsafe { std::env::set_var("PATH", dir.path()) };
+        // shim_target 就是 fake 自己——所有候选都 == shim_target → collision
+        let shim_target = &fake;
+        let err = resolve_real_lark_cli(shim_target, None).expect_err("collision");
+        match err {
+            OnboardingError::LarkCliCollidesShimTarget {
+                found_at,
+                shim_target: st,
+            } => {
+                assert_eq!(found_at, *shim_target);
+                assert_eq!(st, *shim_target);
+            }
+            other => panic!("expected CollidesShimTarget, got {other:?}"),
+        }
+        unsafe { std::env::set_var("PATH", prev_path) };
+    }
+
+    #[test]
+    fn resolve_flag_invalid_path_propagates_override_invalid() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        unsafe { std::env::remove_var("ROOSTERY_LARK_CLI_BIN") };
+        let bad = Path::new("/definitely/missing/path/lark-cli");
+        let shim_target = Path::new("/tmp/nowhere/lark-cli");
+        let err = resolve_real_lark_cli(shim_target, Some(bad)).expect_err("invalid");
+        match err {
+            OnboardingError::OverrideInvalid { path, reason } => {
+                assert_eq!(path, bad);
+                assert_eq!(reason, "missing");
+            }
+            other => panic!("expected OverrideInvalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn format_report_shows_real_lark_cli_source() {
+        let report = InitReport {
+            identity: None,
+            identity_error: None,
+            agents_installed: vec![],
+            agents_skipped: vec![],
+            shim_path: PathBuf::from("/home/u/.local/bin/lark-cli"),
+            shell_rc_patched: None,
+            real_lark_cli: PathBuf::from("/opt/feishu/lark-cli"),
+            real_lark_cli_source: RealLarkCliSource::Flag,
+            dry_run: false,
+        };
+        let s = format_report(&report);
+        assert!(
+            s.contains("real:     /opt/feishu/lark-cli (from flag)"),
+            "real line should include path + source: {s}"
+        );
+    }
+
+    #[test]
+    fn init_options_default_real_lark_cli_override_is_none() {
+        let opts = InitOptions::default();
+        assert!(opts.real_lark_cli_override.is_none());
+        assert!(!opts.dry_run);
+        assert!(opts.skip_agents.is_empty());
+    }
+
     #[test]
     fn shell_kind_detect_zsh() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::set_var("SHELL", "/bin/zsh") };
         assert_eq!(ShellKind::detect_from_env().unwrap(), ShellKind::Zsh);
@@ -549,7 +885,7 @@ mod tests {
 
     #[test]
     fn shell_kind_detect_bash() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::set_var("SHELL", "/usr/local/bin/bash") };
         assert_eq!(ShellKind::detect_from_env().unwrap(), ShellKind::Bash);
@@ -563,7 +899,7 @@ mod tests {
 
     #[test]
     fn shell_kind_detect_fish_errors() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::set_var("SHELL", "/usr/bin/fish") };
         match ShellKind::detect_from_env() {
@@ -582,7 +918,7 @@ mod tests {
 
     #[test]
     fn shell_kind_detect_unset_errors() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::remove_var("SHELL") };
         match ShellKind::detect_from_env() {

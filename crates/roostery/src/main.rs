@@ -104,6 +104,12 @@ struct InitArgs {
     /// Skip a specific agent's hook installation. May be repeated.
     #[arg(long = "skip-agent", value_name = "AGENT")]
     skip_agents: Vec<String>,
+    /// Explicit path to the real lark-cli binary, bypassing PATH search.
+    /// Priority: this flag > `ROOSTERY_LARK_CLI_BIN` env > PATH search.
+    /// Useful when npm-installed lark-cli (default `~/.local/bin/lark-cli`)
+    /// collides with the shim install target at the same path.
+    #[arg(long = "real-lark-cli", value_name = "PATH")]
+    real_lark_cli: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -320,6 +326,7 @@ fn run_init(args: InitArgs) -> ExitCode {
     let opts = InitOptions {
         dry_run: args.dry_run,
         skip_agents,
+        real_lark_cli_override: args.real_lark_cli,
     };
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -353,4 +360,29 @@ fn parse_skip_agents(raw: &[String]) -> Result<Vec<AgentKind>, String> {
     raw.iter()
         .map(|s| AgentKind::from_str(s).map_err(|e| e.to_string()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Top-level wrapper so InitArgs can be exercised via `try_parse_from`.
+    #[derive(Parser)]
+    struct InitWrapper {
+        #[command(flatten)]
+        args: InitArgs,
+    }
+
+    #[test]
+    fn init_args_parses_real_lark_cli_flag() {
+        let w = InitWrapper::try_parse_from(["test", "--real-lark-cli", "/opt/feishu/lark-cli"])
+            .expect("parse");
+        assert_eq!(
+            w.args.real_lark_cli.as_deref(),
+            Some(std::path::Path::new("/opt/feishu/lark-cli"))
+        );
+        assert!(!w.args.dry_run);
+        assert!(w.args.skip_agents.is_empty());
+    }
 }
