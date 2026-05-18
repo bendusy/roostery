@@ -45,6 +45,9 @@
 | `roostery smoke` 子命令 | clap derive 主 bin 的第一个真正子命令（feature `2026-05-17-roostery-smoke` 引入 clap 4 derive 作为项目首个 CLI 解析器，后续 init / dispatch 复用）。退 0 = `all_ok` / 退 1 = 至少一条 probe 失败；`--version` 锁定 `roostery 0.0.0 (rust)`（`#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (rust)"))]`）|
 | `Config` | Phase 3 落地的 `crates/roostery/src/config.rs`（feature `2026-05-17-config-yaml`）。顶层 6 字段 `#[non_exhaustive]`：`schema_version: u32` (1) / `identity: Identity { user_id, default_chat_id, default_task_app_token }` / `runners: BTreeMap<String, serde_yml::Value>`（开放结构——加新 runner kind 不动 schema 顶层）/ `budgets: Budgets { default: BudgetCfg { max_calls=100, max_cost_usd=1.0 } }` / `trace: TraceConfig { max_depth=8 }` / `journal: JournalConfig { dir, rotation="daily" }`。所有字段 `#[serde(default)]`——任意子集 YAML 都能反序列化（roadmap §4.6 "顶层字段缺失用编译期默认值" 兑现）。`ConfigError` `#[non_exhaustive]` 4 变体（LoadFailed / ParseFailed / SaveFailed / SchemaVersionMismatch）。4 公开 fn：`load` / `load_from(&Path)` / `save(&cfg)` / `save_to(&cfg, &Path)`（atomic `.tmp` + rename）。**不读 env override**（各模块自管，与 `lark_cli/subprocess.rs::ENV_BIN` 等不耦合）；**不实现 schema migration**（v2 落地时由 cs-roadmap update 评估）|
 | YAML lib | `serde_yml = "0.0.12"`——`serde_yaml` 2024 起 unmaintained，`serde_yml` 是主流 maintained fork（drop-in replacement）。仅 `config` 模块直接 import；其他模块不引 YAML 依赖 |
+| `hooks_merge` 模块 | Phase 3 落地的 `crates/roostery/src/hooks_merge.rs`（feature `2026-05-18-hooks-merge`）。JSON 深合并把 Stop hook 片段注入 `~/.claude/settings.json` / `~/.codex/hooks.json`，按 event key + matcher + command tail 三层幂等去重；3 个模板用 `include_str!` 编译期嵌入：`CC_STOP_HOOK_JSON` + `CODEX_STOP_HOOK_JSON` + `STOP_HOOK_AGENT_NOTIFY_SH`（roadmap §4.7 兑现首例）；3 公开 fn `render_template` / `merge_event_hook` / `apply_template`；`HooksError` `#[non_exhaustive]` 4 变体；JSON 输出 `indent=2` + `\n` trailing（Python golden file byte-for-byte 除 env 前缀偏离）；atomic `.tmp` + rename |
+| `ROOSTERY_AGENT` env | Stop hook command 拼前缀 `ROOSTERY_AGENT=cc` / `=codex` 让下游 stop bridge sh 识别 runtime；**不沿用** Python `FEISHU_HUB_AGENT`（roadmap items.yaml notes "除非文档另有规定" 明示偏离）。与 `ROOSTERY_HOME` / `ROOSTERY_LARK_CLI_BIN` / `ROOSTERY_REAL_LARK_CLI` / `ROOSTERY_NOJOURNAL` 同 prefix |
+| `src/templates/` 资源文件子目录 | 项目首次引入"非 Rust 源码资源文件子目录"模式（feature `2026-05-18-hooks-merge` 落地）。纯文本资源（.json / .sh），用 `include_str!` 引用，不进 `pub mod` 声明；rust-module-organization decision 拟扩展第 5 档归档 |
 
 ### State ownership
 
@@ -157,7 +160,17 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 - 设计约束：**不读 env override**（各模块自管，如 `lark_cli/subprocess.rs::ENV_BIN`、`smoke::ENV_BIN` 自管 `ROOSTERY_LARK_CLI_BIN`；config 仅管文件层）；**不实现 schema migration**（v2 落地时走 cs-roadmap update）；**不消费 runners 子结构**（占位给 Phase 4）；**不修改 main.rs**（纯 lib 扩展，无 CLI 子命令变更）
 - 不变量：`load` 文件不存在 → default；atomic save；schema_version 缺失隐式=1；config 不调 redact（不含敏感数据）；`Config::default()` 可 save+load round-trip 等价
 
-- 子 feature：**`config-yaml`（done）** / `hooks-merge` / `roostery-init`
+- 子 feature：**`config-yaml`（done）** / **`hooks-merge`（done）** / `roostery-init`
+
+**hooks_merge 模块**（已落地，feature `2026-05-18-hooks-merge`，Phase 3）：
+
+- 新文件 `crates/roostery/src/hooks_merge.rs`（档 1 单文件，产品 ~249 行 + 内联测试 ~296 行）+ `src/templates/` 子目录存 3 个资源文件（`cc_stop_hook.json` / `codex_stop_hook.json` / `agent_stop_notify.sh`）
+- 3 个 `pub const` via `include_str!` 编译期嵌入（roadmap §4.7 兑现首例）：`CC_STOP_HOOK_JSON` / `CODEX_STOP_HOOK_JSON` / `STOP_HOOK_AGENT_NOTIFY_SH`
+- 公开 3 fn：`render_template(src, hook_script)`（`{{HOOK_SCRIPT}}` `str::replace` + `serde_json::from_str`）/ `merge_event_hook(target_path, fragment)`（按 event key + matcher + command tail 三层幂等去重）/ `apply_template(src, target_path, hook_script)`（一站式 render+merge+atomic write）
+- `HooksError` `#[non_exhaustive]` 4 变体：ReadFailed / ParseFailed / FragmentInvalid / SaveFailed
+- 模板内容：CC + Codex 模板都用 `SessionEnd` event + matcher `"*"` + command `ROOSTERY_AGENT={cc,codex} {{HOOK_SCRIPT}}` + timeout 10；sh 模板从 stdin 抽 session_id / transcript_path / cwd 后调 `roostery dispatcher fire`（Phase 4 dispatcher 起来后正常工作；Phase 3 期间 hook 触发会 clap "unknown subcommand" 但末尾 `\|\| true` 吞掉不阻塞 agent runtime）
+- 设计约束：**不引模板引擎**（只 1 个占位符用 `str::replace`）；**env 前缀切到 `ROOSTERY_AGENT`**（不沿用 Python `FEISHU_HUB_AGENT`，roadmap items.yaml "除非文档另有规定" 明示偏离）；**不消费 config**（roadmap depends_on 是规划顺序而非代码 import）；**不实现 unmerge / schema 校验**；**不内置 target_path 默认**（caller 显式传）
+- 不变量：merge idempotent（同 fragment 跑 N 次 = 跑 1 次，按 command tail 去重）；atomic `.tmp` + rename；target 不存在 → fragment 直接当结果不报错；parse 失败 → Err 不破坏原文件；command 去重用 tail 匹配（剥 `KEY=VAL` env 前缀，让"用户改 env value 但脚本路径不变"识别为同 hook）；JSON 输出 `indent=2` + `\n` trailing newline
 
 ### Module E · Dispatcher（Phase 4）
 本地执行桥。event → 规则匹配 → trace/budget gate → runner → emit。`runtime-neutral` req 的执行机制（通过 `Runner` trait 调度，不感知具体 runtime）。
@@ -190,7 +203,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 | 4.4 | `HookEvent` schema | D/E → E | Phase 3-4 |
 | 4.5 | `TraceContext` | E → F → C | Phase 4 |
 | 4.6 | Config schema | D 写 → 所有读 | Phase 3 — **已落地**（feature `2026-05-17-config-yaml`） |
-| 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 |
+| 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 — **已落地**（feature `2026-05-18-hooks-merge`） |
 
 ## 5. 关键架构决定
 
@@ -219,3 +232,4 @@ Feishu Base 作为索引层（**非** source of truth）。
 6. **代码-文档优先级**：Python baseline 与最新文档冲突时**以文档为准**（见 attention.md）。Rust port 不机械 1:1 翻译，失配点记观察项
 7. **redact 模块函数纯且幂等**：`redact::scrub_value` / `scrub_argv` / `scrub_text` 不修改入参（接 `&` 借用返回 owned 新值）；对已含 `MASK` 的输入再跑结果等价；audit path 顺序 = 遍历顺序（Phase 1 落地，commit `1e392e5`）
 8. **journal schema_version=1 公开承诺**：自 journal-core 落地起（commit `b9ac5be`），`JournalEntry` 字段名 / 类型 / 序列化形态变更需 bump version + 兼容旧版 deserialize + `cs-roadmap update` 评估 portable-by-default 影响。`Journal::append` 不内建脱敏，caller 自行用 `redact::scrub_value` 过 `params` 后填入
+9. **`ROOSTERY_AGENT` env 约定**：agent runtime 识别用 `ROOSTERY_AGENT=cc` / `=codex`（Stop hook command 拼前缀），由 stop bridge sh 在 hook fire 时读取传给 `roostery dispatcher fire`；**不沿用** Python `FEISHU_HUB_AGENT`（feature `2026-05-18-hooks-merge` 一次切口径，roadmap items.yaml "除非文档另有规定" 明示偏离）

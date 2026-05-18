@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ROOSTERY_AGENT=codex {{HOOK_SCRIPT}}",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

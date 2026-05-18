@@ -4,173 +4,173 @@ created: 2026-05-18
 steps:
   - action: "lib.rs + 模板文件 + 类型骨架：lib.rs 加 pub mod hooks_merge;；新建 src/hooks_merge.rs 含 3 个 pub const (include_str! cc_stop_hook.json / codex_stop_hook.json / agent_stop_notify.sh) + HooksError #[non_exhaustive] 4 变体 + 3 fn 签名 todo!()；新建 src/templates/{cc_stop_hook.json,codex_stop_hook.json,agent_stop_notify.sh} 3 个模板文件（env 前缀切到 ROOSTERY_AGENT，sh 调 roostery dispatcher fire）"
     exit_signal: "cargo build 成功；3 个 const 非空字符串单测；既有 testsuite 无回归"
-    status: pending
+    status: done
 
   - action: "render_template + 字符串替换：实现 render_template（String::replace + serde_json::from_str）；不引模板引擎"
     exit_signal: "render 4 单测（CC happy / Codex happy / 占位符替换验证 / 模板非法 JSON case）"
-    status: pending
+    status: done
 
   - action: "merge_event_hook 核心算法：实现 detect_event_key + load_existing + tail 匹配去重；纯函数行为不做文件 IO"
     exit_signal: "merge 6 单测（空 target / 已有不同 event / 同 event 不同 matcher / 同 matcher 不同 command / 同 command 去重 / fragment invalid 各错误）"
-    status: pending
+    status: done
 
   - action: "apply_template + atomic save：实现 apply_template（render + merge + write）；ensure parent dir + fs::write .tmp + fs::rename"
     exit_signal: "apply_template 端到端单测（fixture 路径 + .tmp 不残留 + 写入 JSON byte 一致）"
-    status: pending
+    status: done
 
   - action: "集成测试 + JSON 输出格式守护：写 ≥ 1 集成测试 tests/hooks_merge_integration.rs（CC + Codex 都注入；二次 apply 幂等；输出 indent=2 + \\n 结尾断言）"
     exit_signal: "集成测试通过；cargo test --all 全绿"
-    status: pending
+    status: done
 
   - action: "完整验收 + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令全绿；推 CI 验三 job"
     exit_signal: "本地四命令全绿；远端 CI 全绿"
-    status: pending
+    status: done
 
 checks:
   - item: "src/hooks_merge.rs 存在；档 1 单文件 < 500 行"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "src/templates/ 子目录含 3 文件（cc_stop_hook.json / codex_stop_hook.json / agent_stop_notify.sh）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "3 个 pub const：CC_STOP_HOOK_JSON / CODEX_STOP_HOOK_JSON / STOP_HOOK_AGENT_NOTIFY_SH 都 include_str! 引用，全非空"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "HooksError #[non_exhaustive] thiserror 4 变体（ReadFailed { source: io::Error #[from] } / ParseFailed { source: serde_json::Error } / FragmentInvalid { reason } / SaveFailed { source: io::Error }）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "公开 3 fn：render_template / merge_event_hook / apply_template 签名与 design §2.1 一致"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "模板里 env 前缀 ROOSTERY_AGENT=cc / =codex（不沿用 Python FEISHU_HUB_AGENT）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "sh 模板调 roostery dispatcher fire（不调 python3 -m roostery.stop_hook）"
     source: 名词契约
-    status: pending
+    status: passed
 
   - item: "不变量 1：merge idempotent，同 fragment 跑 N 次 = 跑 1 次"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 2：atomic write 用 .tmp + std::fs::rename"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 3：target 不存在 → fragment 直接当结果不报错"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 4：parse 失败 → Err 不破坏原文件"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 5：Fragment 必须 1 个 event key + non-empty matcher / hooks 数组 + command 字符串；任一缺失 → FragmentInvalid"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 6：command 去重用 tail 匹配（剥 KEY=VAL env 前缀）"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "不变量 7：JSON 输出 indent=2 + \\n trailing newline（Python parity）"
     source: 流程级约束
-    status: pending
+    status: passed
 
   - item: "挂载点 1：crates/roostery/src/hooks_merge.rs 存在"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 2：pub mod hooks_merge; 出现在 lib.rs"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 3：templates/ 子目录 3 文件全在"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 4：3 个 pub const 暴露"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "挂载点 5：apply_template 公开 fn 暴露"
     source: 挂载点
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'use tinytemplate|use handlebars|use askama' hooks_merge.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'FEISHU_HUB_' hooks_merge.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -rn 'FEISHU_HUB_' crates/roostery/src/templates/ → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'use tokio|async fn' hooks_merge.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'Config|config::' hooks_merge.rs → 无（不消费 config）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'Journal|journal::' hooks_merge.rs → 无（不写 journal）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'fn parse_cc_schema|fn validate_cc' hooks_merge.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep -E 'fn unmerge|fn remove_hook' hooks_merge.rs → 无（不实现卸载）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：wc -l hooks_merge.rs < 500"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：Cargo.toml 无新依赖（serde_json 已有）"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "范围守护：grep 'fn main|Subcommand' hooks_merge.rs → 无"
     source: 范围守护
-    status: pending
+    status: passed
 
   - item: "验收场景 S1.1-S1.4：render 4 行为（CC happy / Codex happy / 占位符替换 / 模板非法 JSON）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S2.1-S2.7：merge 7 行为（含 tail 去重 + ROOSTERY env 同 command 去重）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S3.1-S3.5：fragment 校验 5 错误路径全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S4.1-S4.5：apply_template 端到端 5 行为（target 不存在 / 已有不同 event / 二次幂等 / parent 自动创建 / atomic .tmp 不残留）全过"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S5.1-S5.2：JSON 输出 indent=2 + \\n + 与 Python golden file byte-for-byte（除 env 前缀偏离）一致"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景 S6.1-S6.5：cargo test --all + --doc + clippy + fmt 四命令全绿 + 3 const 非空"
     source: 验收场景
-    status: pending
+    status: passed
 
   - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
     source: 验收场景
-    status: pending
+    status: pending  # 待 push 后 CI 验证
