@@ -69,10 +69,10 @@ items:
   - slug: hooks-merge
     description: JSON 深合并，CC / Codex Stop hook 注入 ~/.claude/settings.json / ~/.codex/hooks.json
     depends_on: [config-yaml]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-18-hooks-merge
     minimal_loop: false
-    notes: "Phase 3；Python 版输出做 golden file，Rust 版 byte-for-byte 一致（除非文档另有规定）"
+    notes: "Phase 3；Python 版输出做 golden file，Rust 版 byte-for-byte 一致（除非文档另有规定）；env 前缀切到 ROOSTERY_AGENT=cc/codex（不沿用 FEISHU_HUB_AGENT，文档明示偏离）；模板 include_str! 嵌入 cc_stop_hook.json + codex_stop_hook.json + agent_stop_notify.sh 三文件；sh 调 roostery dispatcher fire 形态，Phase 4 dispatcher 起来后正常工作"
 
   - slug: roostery-init
     description: roostery init 子命令 + identity / agent_detect / 模板嵌入（§4.7）
