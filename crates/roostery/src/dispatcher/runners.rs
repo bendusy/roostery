@@ -236,6 +236,39 @@ fn truncate_head(s: &str) -> String {
     format!("{}\n... [truncated]", &s[..end])
 }
 
+/// Drain a child pipe (stdout/stderr) without bounded memory growth: read into
+/// a fixed 8KB chunk buffer, copy to `out` only while `out.len() < STDOUT_HEAD_CAP`,
+/// then keep reading + discarding to prevent pipe-full deadlock on long output.
+///
+/// **codex audit round-4 P2 修复**：原 `read_to_string` 把整个子进程输出读进
+/// 内存——cc_headless 偶尔输出 100MB+ JSON stream 会把 agent runtime 打爆。
+fn drain_with_head_cap<R: std::io::Read>(reader: Option<R>) -> String {
+    let mut out = String::new();
+    let Some(mut reader) = reader else {
+        return out;
+    };
+    let mut buf = [0u8; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                // 只在 out 还未到 cap 时追加；超过 cap 后纯 discard 保持 pipe 流动
+                if out.len() < STDOUT_HEAD_CAP {
+                    let remaining = STDOUT_HEAD_CAP.saturating_sub(out.len());
+                    let take = n.min(remaining);
+                    // 用 String::from_utf8_lossy 处理任意字节序列（cc_headless
+                    // 输出应是 UTF-8 但子进程崩溃可能输出非法字节）。
+                    let chunk = String::from_utf8_lossy(&buf[..take]);
+                    out.push_str(&chunk);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break, // pipe broken / closed by kill — done
+        }
+    }
+    out
+}
+
 // --- NoopRunner -----------------------------------------------------------
 
 pub struct NoopRunner;
@@ -382,7 +415,6 @@ fn spawn_with_timeout(
     env: &HashMap<String, String>,
     timeout_ms: u64,
 ) -> Result<RawProcessOutcome, RunnerError> {
-    use std::io::Read;
     use std::process::{Command, Stdio};
     use std::thread;
     // **架构红线**（ARCHITECTURE §6 SAFE_ENV_FORWARD）: 子进程必须从空 env 起，
@@ -412,24 +444,16 @@ fn spawn_with_timeout(
 
     // **deadlock 修复**：stdout / stderr 必须并行 drain，否则子进程输出超 OS
     // pipe buffer (≥ 64KB) 时 write 阻塞 → 父进程 try_wait 等不到 exit → 误报
-    // timeout。两个 reader thread 各自 read_to_string；主线程只做 try_wait + 时
+    // timeout。两个 reader thread 各自 chunk-drain；主线程只做 try_wait + 时
     // 间窗口控制；exit 后 join 两 reader。
+    //
+    // **codex audit round-4 P2 修复**：chunk-drain 模式只在内存里保留 head
+    // cap (STDOUT_HEAD_CAP=4KB) 字节，超出仍持续 read+discard 防 deadlock。
+    // 防 cc_headless 输出 GB-scale stream 把 agent runtime 进程内存打爆。
     let stdout_h = child.stdout.take();
     let stderr_h = child.stderr.take();
-    let stdout_join = thread::spawn(move || -> String {
-        let mut s = String::new();
-        if let Some(mut h) = stdout_h {
-            let _ = h.read_to_string(&mut s);
-        }
-        s
-    });
-    let stderr_join = thread::spawn(move || -> String {
-        let mut s = String::new();
-        if let Some(mut h) = stderr_h {
-            let _ = h.read_to_string(&mut s);
-        }
-        s
-    });
+    let stdout_join = thread::spawn(move || -> String { drain_with_head_cap(stdout_h) });
+    let stderr_join = thread::spawn(move || -> String { drain_with_head_cap(stderr_h) });
 
     // checked_add 防 timeout_ms 上限校验之外的 Instant 加法溢出 panic（虽然
     // 调用方已校验 ≤ MAX_TIMEOUT_MS，此处再 defense-in-depth 一层）。
@@ -985,5 +1009,42 @@ EOF
         let head = truncate_head(&long);
         assert!(head.len() <= STDOUT_HEAD_CAP + 32); // + "\n... [truncated]" suffix
         assert!(head.ends_with("[truncated]"));
+    }
+
+    // --- codex audit round-4 P2: drain_with_head_cap -----------------
+
+    #[test]
+    fn drain_with_head_cap_small_input_full_capture() {
+        let input: &[u8] = b"hello world";
+        let out = drain_with_head_cap(Some(input));
+        assert_eq!(out, "hello world");
+    }
+
+    #[test]
+    fn drain_with_head_cap_bounded_memory_for_huge_input() {
+        // 模拟 cc_headless 输出 100MB 的极端场景：缓冲只保留 head cap 字节。
+        let huge: Vec<u8> = b"x".repeat(100 * 1024 * 1024);
+        let out = drain_with_head_cap(Some(&huge[..]));
+        assert!(
+            out.len() <= STDOUT_HEAD_CAP,
+            "drain output len {} should not exceed STDOUT_HEAD_CAP {}",
+            out.len(),
+            STDOUT_HEAD_CAP
+        );
+        assert!(out.starts_with("x"), "captured prefix should start with x");
+    }
+
+    #[test]
+    fn drain_with_head_cap_none_input_returns_empty() {
+        let out: String = drain_with_head_cap::<&[u8]>(None);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn drain_with_head_cap_handles_non_utf8_bytes() {
+        // 子进程崩溃可能输出非 UTF-8 字节序列；不应 panic
+        let bytes: &[u8] = &[0xFF, 0xFE, 0xFD, b'h', b'i'];
+        let out = drain_with_head_cap(Some(bytes));
+        assert!(out.contains("hi"));
     }
 }
