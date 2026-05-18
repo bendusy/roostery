@@ -9,16 +9,26 @@
 //!
 //! See `.codestable/features/2026-05-18-dispatcher-loop/dispatcher-loop-design.md`
 //! §2.1.1.
+//!
+//! 模块组织：Phase 4 / Module E 7 子模块全部聚在本目录下
+//! （refactor `2026-05-18-module-e-subdir`，2026-05-18 acceptance 后落地）。
 
-use crate::budget::{self, BudgetError, BudgetState};
+pub mod budget;
+pub mod hook_event;
+pub mod rules;
+pub mod runaway;
+pub mod runners;
+pub mod trace;
+
+use self::budget::{BudgetError, BudgetState};
+use self::hook_event::HookEvent;
+use self::runaway::{RunawayError, RunawayTracker};
+use self::runners::{RunOutcome, RunnerError, RunnerRegistry, RunnerStatus};
+use self::trace::{TraceContext, TraceError, TraceId};
+use crate::config;
 use crate::config::BudgetCfg;
-use crate::hook_event::HookEvent;
 use crate::journal::{Journal, JournalEntry, JournalResult};
 use crate::paths;
-use crate::runaway::{RunawayError, RunawayTracker};
-use crate::runners::{RunOutcome, RunnerError, RunnerRegistry, RunnerStatus};
-use crate::trace::{TraceContext, TraceError, TraceId};
-use crate::{config, rules};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -462,7 +472,7 @@ pub async fn replay(
     let hook_source = root_entry.action.clone();
 
     let raw = serde_json::json!({
-        "schema_version": crate::hook_event::HOOK_EVENT_SCHEMA_VERSION,
+        "schema_version": self::hook_event::HOOK_EVENT_SCHEMA_VERSION,
         "hook_source": hook_source,
         "session_id": session_id,
         "workspace": workspace,
@@ -502,8 +512,8 @@ pub fn test_rule<'a>(
 #[cfg(test)]
 #[allow(clippy::await_holding_lock)] // test ENV_LOCK serializes ROOSTERY_HOME mutation (attention.md pattern)
 mod tests {
+    use super::runners::Runner;
     use super::*;
-    use crate::runners::Runner;
     use async_trait::async_trait;
     use serde_json::json;
     use std::path::PathBuf;
@@ -570,7 +580,7 @@ mod tests {
             _: &HookEvent,
             _: &TraceContext,
             _: &serde_json::Value,
-        ) -> Result<RunOutcome, crate::runners::RunnerError> {
+        ) -> Result<RunOutcome, super::runners::RunnerError> {
             Ok(RunOutcome {
                 status: RunnerStatus::Success,
                 stdout: String::new(),
@@ -592,7 +602,7 @@ mod tests {
             _: &HookEvent,
             _: &TraceContext,
             _: &serde_json::Value,
-        ) -> Result<RunOutcome, crate::runners::RunnerError> {
+        ) -> Result<RunOutcome, super::runners::RunnerError> {
             Ok(RunOutcome {
                 status: RunnerStatus::Failed {
                     reason: "exit code 42".to_string(),
@@ -619,7 +629,7 @@ mod tests {
             _: &HookEvent,
             _: &TraceContext,
             _: &serde_json::Value,
-        ) -> Result<RunOutcome, crate::runners::RunnerError> {
+        ) -> Result<RunOutcome, super::runners::RunnerError> {
             Ok(RunOutcome {
                 status: RunnerStatus::Success,
                 stdout: String::new(),
@@ -641,8 +651,8 @@ mod tests {
             _: &HookEvent,
             _: &TraceContext,
             _: &serde_json::Value,
-        ) -> Result<RunOutcome, crate::runners::RunnerError> {
-            Err(crate::runners::RunnerError::BinaryNotFound {
+        ) -> Result<RunOutcome, super::runners::RunnerError> {
+            Err(super::runners::RunnerError::BinaryNotFound {
                 kind: "errorer",
                 path: PathBuf::from("/nowhere/claude"),
             })
@@ -824,7 +834,7 @@ mod tests {
                 kind: "chain1",
                 emit: vec![child_event],
             }))
-            .with_runner(Box::new(crate::runners::NoopRunner));
+            .with_runner(Box::new(super::runners::NoopRunner));
         let root = dummy_event("cc-stop");
         let outcome = fire(root, &registry, &rules, &cfg).await;
         assert_eq!(outcome.dispatched.len(), 2);
@@ -854,7 +864,7 @@ mod tests {
                 kind: "chain1",
                 emit: vec![child_event],
             }))
-            .with_runner(Box::new(crate::runners::NoopRunner));
+            .with_runner(Box::new(super::runners::NoopRunner));
         let root = dummy_event("cc-stop");
         let outcome = fire(root, &registry, &rules, &cfg).await;
         assert_eq!(outcome.dispatched.len(), 2);
@@ -885,7 +895,7 @@ mod tests {
                 kind: "chain1",
                 emit,
             }))
-            .with_runner(Box::new(crate::runners::NoopRunner));
+            .with_runner(Box::new(super::runners::NoopRunner));
         let root = dummy_event("cc-stop");
         let outcome = fire(root, &registry, &rules, &cfg).await;
         // 1 root + 16 children = 17

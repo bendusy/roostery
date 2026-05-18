@@ -1,7 +1,7 @@
 //! End-to-end: load rules.yaml from real disk → match real HookEvent.
 
-use roostery::hook_event::HookEvent;
-use roostery::rules::{self, RuleName};
+use roostery::dispatcher::hook_event::HookEvent;
+use roostery::dispatcher::rules::{self, RuleName};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;

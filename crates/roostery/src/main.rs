@@ -1,11 +1,12 @@
 use clap::{Args, Parser, Subcommand};
+use roostery::config;
+use roostery::dispatcher::hook_event::{HOOK_EVENT_SCHEMA_VERSION, HookEvent};
+use roostery::dispatcher::rules;
+use roostery::dispatcher::runners::RunnerRegistry;
 use roostery::dispatcher::{self, DispatchError};
-use roostery::hook_event::{HOOK_EVENT_SCHEMA_VERSION, HookEvent};
 use roostery::hooks_merge::AgentKind;
 use roostery::lark_cli::subprocess::LarkCli;
 use roostery::onboarding::{self, InitOptions};
-use roostery::runners::RunnerRegistry;
-use roostery::{config, rules};
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;

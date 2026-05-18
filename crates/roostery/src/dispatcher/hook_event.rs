@@ -10,7 +10,7 @@
 //! See `.codestable/features/2026-05-18-dispatcher-rules/dispatcher-rules-design.md`
 //! §2.1.1.
 
-use crate::trace::TraceContext;
+use super::trace::TraceContext;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

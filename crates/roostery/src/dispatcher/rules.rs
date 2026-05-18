@@ -18,7 +18,7 @@
 //! See `.codestable/features/2026-05-18-dispatcher-rules/dispatcher-rules-design.md`
 //! §2.1.2.
 
-use crate::hook_event::HookEvent;
+use super::hook_event::HookEvent;
 use crate::paths;
 use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};

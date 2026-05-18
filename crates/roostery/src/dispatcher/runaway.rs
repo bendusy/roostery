@@ -13,7 +13,7 @@
 //! See `.codestable/features/2026-05-18-dispatcher-trace-budget/dispatcher-trace-budget-design.md`
 //! §2.1.3.
 
-use crate::trace::TraceId;
+use super::trace::TraceId;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 use thiserror::Error;

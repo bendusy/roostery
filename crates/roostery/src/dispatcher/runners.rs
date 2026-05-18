@@ -17,8 +17,8 @@
 //! See `.codestable/features/2026-05-18-dispatcher-runners/dispatcher-runners-design.md`
 //! §2.1.1.
 
-use crate::hook_event::HookEvent;
-use crate::trace::TraceContext;
+use super::hook_event::HookEvent;
+use super::trace::TraceContext;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

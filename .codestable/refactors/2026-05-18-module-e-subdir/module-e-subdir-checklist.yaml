@@ -1,0 +1,96 @@
+refactor: 2026-05-18-module-e-subdir
+created: 2026-05-18
+
+steps:
+  - action: "S1 git mv src/dispatcher.rs → src/dispatcher/mod.rs；在 mod.rs 顶部追加 7 行 pub mod {trace,budget,runaway,hook_event,rules,runners}; 声明（dispatcher/ 目录子模块入口）"
+    exit_signal: "git status 显示 dispatcher.rs → dispatcher/mod.rs rename；mod.rs 顶部含 7 行 pub mod"
+    status: done
+
+  - action: "S2 git mv 6 leaf 模块进 src/dispatcher/：trace / budget / runaway / hook_event / rules / runners"
+    exit_signal: "git status 显示 6 个 rename 到 src/dispatcher/{name}.rs；旧顶层 .rs 全消失"
+    status: done
+
+  - action: "S3 改 lib.rs：删 6 个顶层 pub mod 声明（budget / hook_event / rules / runaway / runners / trace），保留 pub mod dispatcher"
+    exit_signal: "lib.rs 业务模块条目 18 → 12；grep pub mod lib.rs 不含 trace/budget/runaway/hook_event/rules/runners"
+    status: done
+
+  - action: "S4 改 7 模块内部互引 use 路径：src/dispatcher/{rules,hook_event,runaway,runners,mod}.rs 内 crate::{trace/budget/hook_event/runaway/rules/runners}:: → super::{name}::；mod.rs 内 use crate::rules → use super::rules（dispatcher/ 内 sibling 互引统一 super 风格）"
+    exit_signal: "cargo build 通过；grep crate::trace::|crate::budget::|crate::runaway::|crate::hook_event::|crate::rules::|crate::runners:: src/dispatcher/ → 0 命中"
+    status: done
+
+  - action: "S5 改 main.rs + 5 个 integration test 的 use 路径：roostery::{trace/budget/runaway/hook_event/rules/runners}:: → roostery::dispatcher::{name}::；dispatcher 路径下符号不变"
+    exit_signal: "cargo build --tests 通过；grep -rE 'use roostery::(trace|budget|runaway|hook_event|rules|runners)::' crates/roostery → 0 命中"
+    status: done
+
+  - action: "S6 跑全四命令 + 守护 grep：cargo fmt --all --check + cargo clippy --all-targets --all-features -- -D warnings + cargo test --all + cargo test --doc + 全 repo 反向 grep（顶层路径 0 命中）"
+    exit_signal: "四命令全绿；测试 count ≥ baseline 322 lib + 7 dispatcher integ + 全部其他 integ；反向 grep 0 命中"
+    status: done
+
+  - action: "S7 HUMAN 目视确认：tree src/dispatcher/ 结构 + cat lib.rs + 抽样 use 路径 + cargo run --bin roostery -- dispatcher --help 输出"
+    exit_signal: "用户明确说\"通过\""
+    status: done
+
+  - action: "S8 commit + 推 CI：单 commit message 'refactor(module-e-subdir): 7 modules → src/dispatcher/'；推 main 等 CI"
+    exit_signal: "CI 三 job 全绿"
+    status: done
+
+checks:
+  - item: "0 函数体改动：git diff --stat 后无任何 fn / struct / enum / impl / test 函数体行差异（仅 use 行 + pub mod 行 + rename + 新 mod.rs）"
+    source: 行为等价
+    status: done
+
+  - item: "0 模块名 / 类型名改动：grep TraceContext / BudgetState / HookEvent / RunnerRegistry / DispatchOutcome 等公开符号定义位置不变"
+    source: 行为等价
+    status: done
+
+  - item: "0 Cargo.toml 依赖改动：git diff Cargo.toml = 空"
+    source: 行为等价
+    status: done
+
+  - item: "0 用户路径 / 文件格式改动：journal / budget / rules / config 文件路径 schema 不动"
+    source: 行为等价
+    status: done
+
+  - item: "顶层 lib.rs 业务模块从 18 减到 12（删 trace/budget/runaway/hook_event/rules/runners 6 个）"
+    source: 目录组织
+    status: done
+
+  - item: "src/dispatcher/ 含 8 个 .rs（mod.rs + 7 子模块）"
+    source: 目录组织
+    status: done
+
+  - item: "src/dispatcher/ 内部互引使用 super:: 风格统一"
+    source: idiom
+    status: done
+
+  - item: "顶层路径反向 grep：grep -rE 'use roostery::(trace|budget|runaway|hook_event|rules|runners)::' crates/roostery → 0 命中"
+    source: 反向核查
+    status: done
+
+  - item: "顶层路径反向 grep：grep -rE 'use crate::(trace|budget|runaway|hook_event|rules|runners)::' crates/roostery/src → 0 命中（dispatcher 内部用 super::）"
+    source: 反向核查
+    status: done
+
+  - item: "cargo fmt --all --check 全绿"
+    source: 命令验证
+    status: done
+
+  - item: "cargo clippy --all-targets --all-features -- -D warnings 全绿"
+    source: 命令验证
+    status: done
+
+  - item: "cargo test --all 全绿且 count ≥ baseline"
+    source: 命令验证
+    status: done
+
+  - item: "cargo test --doc 全绿"
+    source: 命令验证
+    status: done
+
+  - item: "HUMAN 目视确认通过"
+    source: 人工验收
+    status: done
+
+  - item: "CI 三 job（fmt / clippy / test）远端全绿"
+    source: 模块级
+    status: pending

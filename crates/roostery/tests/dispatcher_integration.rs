@@ -7,11 +7,13 @@
 
 use async_trait::async_trait;
 use roostery::config::Config;
+use roostery::dispatcher::hook_event::{HOOK_EVENT_SCHEMA_VERSION, HookEvent};
+use roostery::dispatcher::rules;
+use roostery::dispatcher::runners::{
+    RunOutcome, Runner, RunnerError, RunnerRegistry, RunnerStatus,
+};
+use roostery::dispatcher::trace::TraceContext;
 use roostery::dispatcher::{self, DispatchError, StepStatus};
-use roostery::hook_event::{HOOK_EVENT_SCHEMA_VERSION, HookEvent};
-use roostery::rules;
-use roostery::runners::{RunOutcome, Runner, RunnerError, RunnerRegistry, RunnerStatus};
-use roostery::trace::TraceContext;
 use serde_json::json;
 use std::sync::Mutex;
 
@@ -113,7 +115,7 @@ async fn fire_chain_two_layers_via_real_registry() {
             emit_count: 2,
             child_source: "downstream".to_string(),
         }))
-        .with_runner(Box::new(roostery::runners::NoopRunner));
+        .with_runner(Box::new(roostery::dispatcher::runners::NoopRunner));
     let outcome = dispatcher::fire(build_event("cc-stop"), &registry, &rules, &cfg).await;
     // 1 root + 2 children = 3
     assert_eq!(outcome.dispatched.len(), 3);
@@ -161,7 +163,7 @@ async fn fire_over_depth_gates_child_step() {
             emit_count: 1,
             child_source: "downstream".to_string(),
         }))
-        .with_runner(Box::new(roostery::runners::NoopRunner));
+        .with_runner(Box::new(roostery::dispatcher::runners::NoopRunner));
     let outcome = dispatcher::fire(build_event("cc-stop"), &registry, &rules, &cfg).await;
     assert_eq!(outcome.dispatched.len(), 2);
     assert_eq!(outcome.dispatched[0].status, StepStatus::Success);

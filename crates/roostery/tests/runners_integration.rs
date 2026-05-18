@@ -1,9 +1,9 @@
 //! Integration: RunnerRegistry::with_defaults + NoopRunner + CcHeadlessRunner
 //! against fake `claude` shell scripts.
 
-use roostery::hook_event::HookEvent;
-use roostery::runners::{CcHeadlessRunner, NoopRunner, RunnerRegistry, RunnerStatus};
-use roostery::trace::TraceContext;
+use roostery::dispatcher::hook_event::HookEvent;
+use roostery::dispatcher::runners::{CcHeadlessRunner, NoopRunner, RunnerRegistry, RunnerStatus};
+use roostery::dispatcher::trace::TraceContext;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
