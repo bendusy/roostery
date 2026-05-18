@@ -120,22 +120,23 @@ pub async fn fire(
     // flock，串行化跨进程 RMW。其他并发 hook 进程在 BudgetGuard::open() 阻塞，
     // 防 max_calls / max_cost_usd 被绕过。fire 结束 commit 写回 + 释放锁。
     //
-    // Guard open 失败（极端 disk error）→ 退化为本地 fresh state + log，保
-    // "agent hook 不被审计层 block" 的 0.1.x 设计意图；但失去跨进程 serial 保证。
-    let (mut budget_state_local, mut guard_opt) =
-        match budget::BudgetGuard::open(&cfg.budgets.default) {
-            Ok(g) => (None, Some(g)),
-            Err(e) => {
-                tracing::error!(
-                    error = %e,
-                    "budget guard open failed; falling back to in-memory fresh state — \
-                     cross-process serialization NOT enforced this fire"
-                );
-                (Some(BudgetState::from_cfg(&cfg.budgets.default)), None)
-            }
-        };
-    let mut runaway = RunawayTracker::new();
+    // **codex audit round-5 P2 修复**：fail-closed —— guard open 失败时不再
+    // 退化到 unlocked fresh state（那条 path 会绕过 flock 和持久化 caps，违反
+    // budget gate enforcement 红线）。改为 journal 一条 GateRejected 根 entry
+    // 然后立即返回。这保留 "budget gate 是执行守门，不是审计建议"的语义。
     let journal = Journal::open(cfg.journal.dir.clone());
+    let mut budget_guard = match budget::BudgetGuard::open(&cfg.budgets.default) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "budget guard open failed; emitting GateRejected root step — \
+                 投放任何 fire() runner 都会绕过 budget 防护，违反红线，禁止 fail-open"
+            );
+            return fire_budget_unavailable(&root_event, &root_ctx, &journal, &e);
+        }
+    };
+    let mut runaway = RunawayTracker::new();
 
     let mut queue: VecDeque<(HookEvent, TraceContext)> = VecDeque::new();
     queue.push_back((root_event, root_ctx.clone()));
@@ -144,19 +145,12 @@ pub async fn fire(
     let mut root_event_id: Option<String> = None;
 
     while let Some((event, ctx)) = queue.pop_front() {
-        let budget_state: &mut BudgetState = if let Some(g) = guard_opt.as_mut() {
-            g.state_mut()
-        } else {
-            budget_state_local
-                .as_mut()
-                .expect("guard or local must exist")
-        };
         let step = process_one(
             event,
             ctx,
             registry,
             rules,
-            budget_state,
+            budget_guard.state_mut(),
             &mut runaway,
             &journal,
             &mut queue,
@@ -168,10 +162,8 @@ pub async fn fire(
         dispatched.push(step);
     }
 
-    // commit budget state + 释放跨进程锁（仅有 guard 时）。
-    if let Some(g) = guard_opt
-        && let Err(e) = g.commit()
-    {
+    // commit budget state + 释放跨进程锁
+    if let Err(e) = budget_guard.commit() {
         tracing::error!(error = %e, "budget guard commit failed; state may be stale");
     }
 
@@ -442,6 +434,44 @@ fn enqueue_emitted(
 // load_or_init_budget 被 BudgetGuard::open 取代（codex audit round-4 P1）。
 // 错误分类（NotFound 自动 from_cfg / 其他 log + caller 兜底）现在在 fire()
 // 的 BudgetGuard::open 处理路径里。
+
+/// codex audit round-5 P2-2：budget guard 完全打不开时的 fail-closed 路径。
+/// 写一条 GateRejected root entry，不调任何 runner —— 守 budget 红线
+/// "无 gate 不 fire"，而不是退化到 unlocked fresh state 偷偷绕过。
+fn fire_budget_unavailable(
+    root_event: &HookEvent,
+    root_ctx: &TraceContext,
+    journal: &Journal,
+    err: &BudgetError,
+) -> DispatchOutcome {
+    let event_id = crate::journal::new_event_id();
+    let mut entry = JournalEntry::new("dispatcher", root_event.hook_source.clone());
+    entry.event_id = event_id.clone();
+    root_ctx.stamp_journal(&mut entry);
+    entry.params = serde_json::json!({
+        "session_id": root_event.session_id,
+        "workspace": root_event.workspace,
+        "trigger_meta": root_event.trigger_meta,
+    });
+    let step = DispatchStep {
+        event_id: event_id.clone(),
+        hook_source: root_event.hook_source.clone(),
+        depth: root_ctx.depth,
+        matched_rule: None,
+        runner_kind: None,
+        status: StepStatus::GateRejected {
+            reason: format!("budget unavailable: {err}"),
+        },
+        fanout: 0,
+        fanout_truncated: false,
+    };
+    let step = finalize_step(journal, entry, step);
+    DispatchOutcome {
+        trace_id: root_ctx.trace_id.clone(),
+        root_event_id: event_id,
+        dispatched: vec![step],
+    }
+}
 
 /// replay 入口——读 journal 找 trace_id 根 entry → 重建 HookEvent → 调 fire；
 /// 分配新 trace_id（不沿用），journal 加 `replay_of: <source_trace_id>` 关联。

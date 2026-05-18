@@ -260,6 +260,16 @@ fn drain_with_head_cap<R: std::io::Read>(reader: Option<R>) -> String {
                     // 输出应是 UTF-8 但子进程崩溃可能输出非法字节）。
                     let chunk = String::from_utf8_lossy(&buf[..take]);
                     out.push_str(&chunk);
+                    // codex round-5 P2：`from_utf8_lossy` 把非法字节扩展成 U+FFFD
+                    // (3 字节 UTF-8)，可能让 out.len() 超 STDOUT_HEAD_CAP。这里做
+                    // 一次 char-boundary 截断兜底；continue read+discard 保 pipe 流动。
+                    if out.len() > STDOUT_HEAD_CAP {
+                        let mut end = STDOUT_HEAD_CAP;
+                        while end > 0 && !out.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        out.truncate(end);
+                    }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -1046,5 +1056,22 @@ EOF
         let bytes: &[u8] = &[0xFF, 0xFE, 0xFD, b'h', b'i'];
         let out = drain_with_head_cap(Some(bytes));
         assert!(out.contains("hi"));
+    }
+
+    #[test]
+    fn drain_with_head_cap_lossy_ffff_expansion_does_not_exceed_cap() {
+        // codex round-5 P2-1：from_utf8_lossy 把每个非法字节扩展成 U+FFFD
+        // (3 字节)。如果 take 接近 STDOUT_HEAD_CAP 边界，push_str 后会超 cap。
+        // 测试：全 0xFF 字节流（每 byte → 3 byte FFFD）；out.len() 必须 ≤ cap。
+        let huge: Vec<u8> = vec![0xFFu8; 100 * 1024]; // 100KB 全非法
+        let out = drain_with_head_cap(Some(&huge[..]));
+        assert!(
+            out.len() <= STDOUT_HEAD_CAP,
+            "lossy expansion 不应超 cap: actual {} > {}",
+            out.len(),
+            STDOUT_HEAD_CAP
+        );
+        // 必须是合法 UTF-8（is_char_boundary 自动保证）
+        assert!(out.is_char_boundary(out.len()));
     }
 }
