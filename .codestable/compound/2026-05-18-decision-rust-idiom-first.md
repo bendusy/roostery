@@ -37,21 +37,28 @@ design 阶段必须显式回应以下 6 条（即使结论是"本 feature 不适
 
 design 阶段任一条选了 "本 feature 不适用"要给具体理由（如"runners 字段 roadmap §4.6 钉死开放结构，不适用第 1 条"）。
 
-### 已落地 backlog（待 cs-refactor）
+### 已落地 backlog（cs-refactor 跟踪）
 
 按"返修代价 / 收益比"从高到低排序：
 
-| # | 模块 | 问题 | Rust idiom 化方向 | 难度 |
-|---|---|---|---|---|
-| B1 | `hooks_merge::merge_event_hook` | `serde_json::Value` 字符串 indexing + `.unwrap()` 满天飞 | parse fragment 为强类型 `HookFragment { event: EventKey, matchers: Vec<MatcherEntry> }` + serde derive；merge 在强类型层做完再 serialize | 中 |
-| B2 | `hooks_merge::HooksError::FragmentInvalid { reason: String }` | 单变体打包多种 invalid，caller 只能 string match | 拆 `NoEventKey` / `MultipleEventKeys { found }` / `EmptyMatcherArray { event }` / `MissingCommand { matcher }` 等独立变体 | 低 |
-| B3 | `hooks_merge::command_tail` | `&str` 字符串外科手术剥 env 前缀 | 引入 `struct HookCommand { env_prefix, script, args }` + parser；script 是 `PathBuf` 不是 `&str` | 中 |
-| B4 | agent runtime 标识 "cc" / "codex" | 字符串字面量散落 templates + 测试 + 未来 dispatcher | `enum AgentKind { Cc, Codex }` + `Display` + `FromStr` + `serde` derive；模板用 `concat!` 或运行时拼接而非硬编码字符串 | 低 |
-| B5 | `agent_stop_notify.sh` 桥接 | Python "sh 调 python" 桥接的纯翻版；引 jq / bash 依赖 | Phase 5 `bot-stop-hook` 起来时 dispatcher 直接 parse hook stdin JSON 替代 sh（design 已 flag）。**不在 hooks-merge 范围**，由 Phase 5 feature 自然吞掉 | 高（实际归 Phase 5） |
-| B6 | `config::Config.runners: BTreeMap<String, serde_yml::Value>` | 已知字段（enabled / cli_path / extra_args）无类型守护 | 改 `BTreeMap<String, RunnerConfig>` + `RunnerConfig { enabled: bool, #[serde(flatten)] extra: BTreeMap<String, Value> }`——已知字段强类型，开放结构走 flatten | 低-中 |
-| B7 | `smoke::ProbeResult` / `SmokeReport` 字段 `head / reason / lark_cli_version` 都用 `Option<String>` | 信息丰富但类型粒度粗 | `head` 改 `Option<HeadBuffer>`（newtype 含 capped 行为）；`reason` 拆 enum；`lark_cli_version` 解析成 `semver::Version` | 低（但收益也低）|
+| # | 模块 | 问题 | Rust idiom 化方向 | 难度 | 状态 |
+|---|---|---|---|---|---|
+| B1 | `hooks_merge::merge_event_hook` | `serde_json::Value` 字符串 indexing + `.unwrap()` 满天飞 | parse fragment 为强类型 `HookFragment { event: EventKey, matchers: Vec<MatcherEntry> }` + serde derive；merge 在强类型层做完再 serialize | 中 | **done** @ `42d8b98`（fragment 侧全程强类型；target 文件侧保留 `Value` 以保留用户未知键原状） |
+| B2 | `hooks_merge::HooksError::FragmentInvalid { reason: String }` | 单变体打包多种 invalid，caller 只能 string match | 拆 `NoEventKey` / `MultipleEventKeys { found }` / `EmptyMatcherArray { event }` / `MissingCommand { matcher }` 等独立变体 | 低 | **done** @ `42d8b98`（拆 `FragmentError` 9 变体 `#[non_exhaustive]`，`HooksError::Fragment(#[from])` 透传） |
+| B3 | `hooks_merge::command_tail` | `&str` 字符串外科手术剥 env 前缀 | 引入 `struct HookCommand { env_prefix, script, args }` + parser；script 是 `PathBuf` 不是 `&str` | 中 | **dropped** @ `42d8b98`（7 行小函数已足够 idiomatic，promote 到 struct 是 ceremony 无安全收益；保留观察，若 dispatcher 阶段需 parse 完整 command 再重启） |
+| B4 | agent runtime 标识 "cc" / "codex" | 字符串字面量散落 templates + 测试 + 未来 dispatcher | `enum AgentKind { Cc, Codex }` + `Display` + `FromStr` + `serde` derive；模板用 `concat!` 或运行时拼接而非硬编码字符串 | 低 | **done** @ `42d8b98`（`pub enum AgentKind { Cc, Codex }` `#[non_exhaustive]` + `Display`/`FromStr`/`serde lowercase` + `template()` 选模板；模板文件保留字符串字面量作 byte-for-byte JSON 资源） |
+| B5 | `agent_stop_notify.sh` 桥接 | Python "sh 调 python" 桥接的纯翻版；引 jq / bash 依赖 | Phase 5 `bot-stop-hook` 起来时 dispatcher 直接 parse hook stdin JSON 替代 sh（design 已 flag）。**不在 hooks-merge 范围**，由 Phase 5 feature 自然吞掉 | 高（实际归 Phase 5） | **deferred** → Phase 5 `bot-stop-hook` feature 自然替换 |
+| B6 | `config::Config.runners: BTreeMap<String, serde_yml::Value>` | 已知字段（enabled / cli_path / extra_args）无类型守护 | 改 `BTreeMap<String, RunnerConfig>` + `RunnerConfig { enabled: bool, #[serde(flatten)] extra: BTreeMap<String, Value> }`——已知字段强类型，开放结构走 flatten | 低-中 | **done** @ `42d8b98`（`RunnerConfig { enabled, #[serde(flatten)] extra }`；提前于 Phase 4 完成，因 hooks_merge 同期返修 cost 边际为零） |
+| B7 | `smoke::ProbeResult` / `SmokeReport` 字段 `head / reason / lark_cli_version` 都用 `Option<String>` | 信息丰富但类型粒度粗 | `head` 改 `Option<HeadBuffer>`（newtype 含 capped 行为）；`reason` 拆 enum；`lark_cli_version` 解析成 `semver::Version` | 低（但收益也低）| **open**（优先级最低，下次有 smoke 相关 feature 触碰时顺手做） |
 
-**优先级**：B2 + B4 是"低难度高收益"，应该最先做（甚至可以挤进 roostery-init feature 一起做 if 顺手）。B1 + B3 是中等返修。B5 等 Phase 5 自然替换。B6 待 Phase 4 dispatcher 真消费 runners 时再返修最准。B7 优先级最低。
+**当前状态**（2026-05-18 sweep 后）：
+
+- B1 / B2 / B4 / B6 已 done（commit `42d8b98`）
+- B3 dropped（结论：函数太小，typestate 化得不偿失）
+- B5 deferred → Phase 5
+- B7 open，优先级最低
+
+**剩余 open 项**：仅 B7。新 feature 若触碰 smoke 模块即合并做掉；否则等 0.1.0 release 节点统一评估。
 
 ### 触发返修的时机
 
