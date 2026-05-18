@@ -225,10 +225,53 @@ pub enum FragmentError {
 
 // --- Render --------------------------------------------------------------
 
-/// Replace `{{HOOK_SCRIPT}}` placeholder in template and parse as JSON.
+/// Render template by **shell-quoting** `hook_script` and replacing the
+/// `{{HOOK_SCRIPT}}` placeholder.
+///
+/// **codex audit finding-07 fix**：旧实现先 `str::replace` raw JSON text 再
+/// parse——`hook_script` 含空格 / 单引号 / 双引号会破坏 JSON 解析或 shell 拆词
+/// （`HOME=/Users/Ben Smith/...` 实际场景）。新实现：
+///
+/// 1. 先 parse template 为 JSON tree（结构正确性独立保证）
+/// 2. 用 shell_quote 包装路径（防 shell 拆词 / metachar 注入）
+/// 3. 用 walker 把 placeholder 替换发生在 JSON String 值内（JSON 重新序列化
+///    时自动处理 string 内的 `"` `\` 等 JSON escape）
+///
+/// 两层 escape 各管一层不互相干扰。
 pub fn render_template(template_src: &str, hook_script: &str) -> Result<Value, HooksError> {
-    let rendered = template_src.replace(HOOK_SCRIPT_PLACEHOLDER, hook_script);
-    serde_json::from_str(&rendered).map_err(|e| HooksError::ParseFailed { source: e })
+    let mut tree: Value =
+        serde_json::from_str(template_src).map_err(|e| HooksError::ParseFailed { source: e })?;
+    let quoted = shell_quote_path(hook_script);
+    replace_placeholder_in_strings(&mut tree, &quoted);
+    Ok(tree)
+}
+
+/// POSIX shell single-quote 安全包装。alphanumeric / `/_-.` 不需引号；其他
+/// 用 `'...'` 包裹，内部 `'` 转义为 `'\\''`。
+fn shell_quote_path(s: &str) -> String {
+    if !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+fn replace_placeholder_in_strings(v: &mut Value, replacement: &str) {
+    match v {
+        Value::String(s) if s.contains(HOOK_SCRIPT_PLACEHOLDER) => {
+            *s = s.replace(HOOK_SCRIPT_PLACEHOLDER, replacement);
+        }
+        Value::Array(a) => a
+            .iter_mut()
+            .for_each(|x| replace_placeholder_in_strings(x, replacement)),
+        Value::Object(o) => o
+            .values_mut()
+            .for_each(|x| replace_placeholder_in_strings(x, replacement)),
+        _ => {}
+    }
 }
 
 // --- Target file IO ------------------------------------------------------
@@ -547,6 +590,60 @@ mod tests {
             Err(HooksError::ParseFailed { .. }) => {}
             other => panic!("expected ParseFailed, got {other:?}"),
         }
+    }
+
+    // --- codex audit finding-07: shell-quote 安全注入 -----------------
+
+    #[test]
+    fn render_path_with_space_is_single_quoted() {
+        let v =
+            render_template(CC_STOP_HOOK_JSON, "/Users/Ben Smith/.roostery/scripts/n.sh").unwrap();
+        let cmd = v["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        // 含空格的路径必须被单引号包裹防 shell 拆词
+        assert_eq!(
+            cmd,
+            "ROOSTERY_AGENT=cc '/Users/Ben Smith/.roostery/scripts/n.sh'"
+        );
+    }
+
+    #[test]
+    fn render_path_with_single_quote_is_escaped() {
+        // POSIX shell '\'' 是单引号字面量的标准 escape 路径
+        let v = render_template(CC_STOP_HOOK_JSON, "/path/it's/here.sh").unwrap();
+        let cmd = v["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(cmd, "ROOSTERY_AGENT=cc '/path/it'\\''s/here.sh'");
+    }
+
+    #[test]
+    fn render_path_with_double_quote_safe_via_json_layer() {
+        // 含 " 的路径——shell_quote 用单引号包，JSON 层正常 escape \"
+        let v = render_template(CC_STOP_HOOK_JSON, r#"/path/has"quote.sh"#).unwrap();
+        // 再次 serialize 应可解析；不破坏 JSON
+        let s = serde_json::to_string(&v).unwrap();
+        let _: Value = serde_json::from_str(&s).expect("roundtrip");
+        let cmd = v["hooks"]["SessionEnd"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(cmd.starts_with("ROOSTERY_AGENT=cc '"));
+        assert!(cmd.contains(r#""quote.sh"#));
+    }
+
+    #[test]
+    fn shell_quote_path_safe_chars_passthrough() {
+        assert_eq!(
+            shell_quote_path("/usr/local/bin/lark"),
+            "/usr/local/bin/lark"
+        );
+        assert_eq!(shell_quote_path("abc_def-123.sh"), "abc_def-123.sh");
+    }
+
+    #[test]
+    fn shell_quote_path_empty_string_quoted() {
+        assert_eq!(shell_quote_path(""), "''");
     }
 
     // --- command_tail ----------------------------------------------------
