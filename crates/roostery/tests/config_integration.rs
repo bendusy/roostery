@@ -1,9 +1,7 @@
 //! End-to-end integration tests for the `config` module.
 
 use roostery::config::{self, Config};
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+use roostery::paths::TEST_ENV_LOCK as ENV_LOCK;
 
 #[test]
 fn roostery_home_override_drives_default_paths() {

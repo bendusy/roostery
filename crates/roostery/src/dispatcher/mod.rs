@@ -528,10 +528,9 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
     use std::path::PathBuf;
-    use std::sync::Mutex;
 
-    // Lock for env vars touched by paths::roostery_home / journal_dir / budget_state_path.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // codex audit finding-09: 统一用 crate::paths::TEST_ENV_LOCK 而非 mod-local 静态锁。
+    use crate::paths::TEST_ENV_LOCK as ENV_LOCK;
 
     fn dummy_event(hook_source: &str) -> HookEvent {
         let raw = json!({

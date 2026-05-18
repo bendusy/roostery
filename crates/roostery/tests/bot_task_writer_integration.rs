@@ -10,10 +10,8 @@ use roostery::bot_task_writer::{
     AppendStepsOptions, CreateTaskOptions, append_steps, create_task, get_or_create_for_session,
 };
 use roostery::lark_cli::mock::MockLarkRunner;
+use roostery::paths::TEST_ENV_LOCK as ENV_LOCK;
 use serde_json::json;
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn isolate(tmp: &tempfile::TempDir) {
     unsafe { std::env::set_var("ROOSTERY_HOME", tmp.path()) };

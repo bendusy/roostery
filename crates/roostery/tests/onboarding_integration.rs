@@ -8,12 +8,10 @@ use roostery::hooks_merge::AgentKind;
 use roostery::lark_cli::LarkError;
 use roostery::lark_cli::mock::MockLarkRunner;
 use roostery::onboarding::{self, InitOptions, SkipReason};
+use roostery::paths::TEST_ENV_LOCK as ENV_LOCK;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 /// Pre-write a smoke state file declaring `all_ok = true` so `ensure_ready`
 /// passes without spawning a real subprocess. `SmokeReport` is

@@ -14,10 +14,8 @@ use roostery::dispatcher::runners::{
 };
 use roostery::dispatcher::trace::TraceContext;
 use roostery::dispatcher::{self, DispatchError, StepStatus};
+use roostery::paths::TEST_ENV_LOCK as ENV_LOCK;
 use serde_json::json;
-use std::sync::Mutex;
-
-static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn isolate_home(tmp: &tempfile::TempDir) {
     unsafe { std::env::set_var("ROOSTERY_HOME", tmp.path()) };

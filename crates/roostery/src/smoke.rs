@@ -576,7 +576,8 @@ mod tests {
         }
     }
 
-    static ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // codex audit finding-09: 统一用 crate::paths::TEST_ENV_LOCK 而非 mod-local 静态锁
+    use crate::paths::TEST_ENV_LOCK as ENV_GUARD;
 
     fn write_state(home: &std::path::Path, json: &str) -> std::path::PathBuf {
         let dir = home.join("state");

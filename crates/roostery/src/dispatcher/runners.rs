@@ -635,10 +635,10 @@ mod tests {
     }
 
     // --- S4 prep_env ------------------------------------------------------
-    // These tests touch $ENV; we serialize on a module-local mutex.
+    // These tests touch $ENV; serialize via crate-wide TEST_ENV_LOCK
+    // (paths.rs::TEST_ENV_LOCK 是规约要求的统一锁；codex audit finding-09 修复)。
 
-    use std::sync::Mutex;
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::paths::TEST_ENV_LOCK as ENV_LOCK;
 
     #[test]
     fn prep_env_includes_base_fallbacks() {

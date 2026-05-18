@@ -307,9 +307,9 @@ fn rc_to_exitcode(rc: i32) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // codex audit finding-09: 统一用 crate-wide TEST_ENV_LOCK。shim 是 cargo bin
+    // target，同 crate 的 lib 模块可直接 `use roostery::...` 访问。
+    use roostery::paths::TEST_ENV_LOCK as ENV_LOCK;
 
     fn with_env<F: FnOnce()>(real: Option<&str>, body: F) {
         let _g = ENV_LOCK.lock().unwrap();
