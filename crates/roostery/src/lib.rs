@@ -4,6 +4,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub mod agent_detect;
 pub mod budget;
 pub mod config;
+pub mod dispatcher;
 pub mod hook_event;
 pub mod hooks_merge;
 pub mod identity;

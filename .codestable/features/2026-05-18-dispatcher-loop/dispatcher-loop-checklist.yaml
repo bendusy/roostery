@@ -4,196 +4,196 @@ created: 2026-05-18
 steps:
   - action: "S1 类型骨架：新建 src/dispatcher.rs；DispatchOutcome / DispatchStep / StepStatus（5 态）/ DispatchError（#[non_exhaustive] 6 变体）类型定义；fire / replay / test_rule 函数签名 todo!()；DEFAULT_MAX_FANOUT: usize = 16 const"
     exit_signal: "cargo build 成功；类型 trivial 单测（StepStatus eq / DispatchError display / const 暴露）3+"
-    status: pending
+    status: done
 
   - action: "S2 journal read API：journal.rs 加 pub fn load_by_trace_id(dir: &Path, trace_id: &str) -> std::io::Result<Vec<JournalEntry>>；扫 dir 下 jsonl filter by trace_id；jsonl 解析失败行 skip 不报错"
     exit_signal: "journal 4 单测（empty dir / single file 命中 / 多文件多 trace 过滤 / 解析失败行 skip）"
-    status: pending
+    status: done
 
   - action: "S3 fire 主链路（单 event 不含 emitted_events 链）：VecDeque 队列骨架但只处理根 event；trace.check_depth → rules.matches → budget.check_or_raise(0.0) → runaway.record + check → registry.find → runner.run → budget.consume(cost_usd if Some) + budget.save → journal.append；每分支写 journal；失败永不冒泡"
     exit_signal: "5 单测（happy success / no_match / unknown_kind skipped / budget over_budget gate_rejected / runner Failed exit≠0）"
-    status: pending
+    status: done
 
   - action: "S4 emitted_events 链式分发：runner 返 emitted_events 后每条 ctx.child(Some(step.event_id)) push back to queue；DEFAULT_MAX_FANOUT (16) 截断 + journal entry 标 fanout_truncated；子 event 出队走 trace.check_depth 守 max_depth"
     exit_signal: "3 单测（链式 2 层 success / 超 max_depth 第 2 层 gate_rejected / fanout 超 16 截断）"
-    status: pending
+    status: done
 
   - action: "S5 replay 主流程：pub async fn replay(source_trace_id, registry, rules, cfg) → load_by_trace_id 找根 entry（depth==0 or parent_event_id is None）→ 重建 HookEvent（hook_source ← action / session_id workspace trigger_meta ← params）→ 分配新 trace_id（不沿用）→ 调 fire；journal entry 加 replay_of 字段"
     exit_signal: "3 单测（happy replay / trace_id 不存在 ReplayNotFound / 根 entry 字段缺 EventReconstructFailed）"
-    status: pending
+    status: done
 
   - action: "S6 test-rule：pub fn test_rule(event, rules) -> Option<Match<'_>> trivial wrapper；不调 runner / 不写 journal / 不消费 budget"
     exit_signal: "2 单测（命中返 Some / 不命中返 None）"
-    status: pending
+    status: done
 
   - action: "S7 CLI wiring：main.rs 加 Command::Dispatcher(DispatcherArgs) + clap subcommand 嵌套 fire / replay / test-rule；FireArgs/ReplayArgs/TestRuleArgs；flag 模式（--agent --session --cwd --summary）合成 HookEvent；--stdin-event 读 stdin JSON；fire 始终 exit 0；replay/test-rule 走 DispatchError exit 1；tokio current_thread runtime"
     exit_signal: "clap 解析单测；main 集成 smoke（registry 注入 NoopRunner 验通路）"
-    status: pending
+    status: done
 
   - action: "S8 集成测试：新建 tests/dispatcher_integration.rs：fire happy NoopRunner / fire chain 2 层（fake runner 返 emitted_events）/ fire over_budget / fire over_depth / replay roundtrip / test-rule match-yes / test-rule match-no"
     exit_signal: "集成测试 ≥7 全绿；lib.rs 加 pub mod dispatcher; 1 mod 暴露"
-    status: pending
+    status: done
 
   - action: "S9 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；N1-N12 + idiom grep 0 命中；推 CI 验三 job"
     exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表全 0 命中"
-    status: pending
+    status: done
 
 checks:
   - item: "src/dispatcher.rs 存在；fire / replay 是 pub async fn；test_rule 是同步 pub fn"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "DispatchOutcome 3 字段（trace_id: TraceId / root_event_id: String / dispatched: Vec<DispatchStep>）全 pub"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "DispatchStep 7 字段（event_id / hook_source / depth / matched_rule: Option<String> / runner_kind: Option<String> / status: StepStatus / fanout: usize）全 pub"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "StepStatus enum 5 态（Success / Skipped { reason } / GateRejected { reason } / Failed { reason } / NoMatch）"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "DispatchError #[non_exhaustive] 6 变体（ConfigLoadFailed / RulesLoadFailed / JournalDirNotFound / ReplayNotFound / EventReconstructFailed / BadCliInput）"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "DEFAULT_MAX_FANOUT: usize = 16 const 公开"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "lib.rs 加 pub mod dispatcher; 1 mod 暴露"
     source: 挂载点
-    status: pending
+    status: done
 
   - item: "main.rs 加 Command::Dispatcher(DispatcherArgs) + clap 嵌套 sub fire/replay/test-rule"
     source: 挂载点
-    status: pending
+    status: done
 
   - item: "journal.rs 加 pub fn load_by_trace_id(dir, trace_id) read API；既有 write API 不动"
     source: 挂载点
-    status: pending
+    status: done
 
   - item: "Cargo.toml 0 新增依赖（tokio / thiserror / serde / serde_json / clap 全部既有）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 1：任何 gate/runner/DispatchError 失败分支都 journal.append 一条带 result 字段"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 2：trace.max_depth 是唯一深度守门；emitted_events 子 event 出队走 trace.check_depth"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 3：fanout cap DEFAULT_MAX_FANOUT=16 守 width；超出截断 + journal 标 fanout_truncated"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 4：budget.check_or_raise(0.0) 在 runner 调用前；runner 成功后才走 budget.consume(cost_usd) + budget.save"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 5：runaway.record 在 budget 之后、registry.find 之前；触发返 GateRejected"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 6：unknown runner kind → StepStatus::Skipped { reason: 'unknown runner kind: ...' }；budget 不 consume"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 7：dispatcher.rs 不直接走飞书 IO（红线 N1 / N3 守护）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 8：fire 永不冒泡错误 → 始终返 DispatchOutcome；main.rs Fire 分支始终 ExitCode::SUCCESS"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 9：replay 分配新 trace_id；journal entry 加 replay_of: <source_trace_id> 关联"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 10：rules / config 在 fire/replay 入口加载一次；链式分发期间不重读"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "idiom #1 强类型：DispatchOutcome / DispatchStep / StepStatus / DispatchError 全 struct/enum；无新 Value 字段"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #2 error 颗粒度：DispatchError 6 变体细分；与 RunnerError / RulesError / BudgetError 分层不混"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #3 newtype：复用 trace.rs TraceId；不新引入"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #4 typestate：不引入（fire 函数式风格）"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #5 零拷贝：rules.matches 返 Match<'a> 借用 rules/event；DispatchStep 字段 String 拥有（runtime 串场景必须 own）"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #6 编译期：DEFAULT_MAX_FANOUT const"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "守护 grep N1：grep -E 'LarkRunner|lark_cli::' crates/roostery/src/dispatcher.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N2：grep -E 'reqwest|openai|anthropic' crates/roostery/src/dispatcher.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N3：grep -E 'Command::new|std::process::Command|tokio::process' crates/roostery/src/dispatcher.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N4：replay 子命令无 --dry flag（grep -E 'dry.*replay|replay.*dry' crates/roostery/src/main.rs → 0）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N5：grep -E 'per_runner|per_rule' crates/roostery/src/dispatcher.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N6：grep -E 'cron|scheduler|daemon|tokio::time::interval' crates/roostery/src/dispatcher.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N7：rules / config 在 fire/replay 入口加载一次（grep -E 'rules::load|config::load' crates/roostery/src/dispatcher.rs ≤ 2 次出现且仅在公开 fn 入口附近）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N8：本期不动 templates/agent_stop_notify.sh（git diff 该文件 0）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N9：grep -E '\\bretry\\b|max_retries' crates/roostery/src/dispatcher.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N10：rules 不命中 = no_match journal 写入即可；dispatcher.rs 不实装 IM 兜底（grep -E 'im_send|fallback_im' crates/roostery/src/dispatcher.rs → 0）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N11：grep -E 'tokio::spawn|join_all|FuturesUnordered' crates/roostery/src/dispatcher.rs → 0 命中（链式分发是串行 BFS 队列，不并发）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N12：git diff 仅 dispatcher.rs / main.rs / journal.rs / lib.rs / tests/ / Cargo.toml（trace.rs / budget.rs / runaway.rs / rules.rs / runners.rs / hook_event.rs 零改动）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep rust-idiom-first：grep -rE 'as_object_mut\\(\\)\\.unwrap\\(\\)|as_array_mut\\(\\)\\.unwrap\\(\\)' crates/roostery/src/dispatcher.rs → 0 命中"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "CI 三 job（fmt / clippy / test）远端全绿"
     source: 模块级

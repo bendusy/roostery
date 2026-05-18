@@ -113,6 +113,49 @@ impl Default for Journal {
     }
 }
 
+/// Scan `dir` for jsonl journal files and return all entries whose
+/// `trace_id` field matches `trace_id`. Files are processed in filename order
+/// (date-sorted given the `YYYY-MM-DD.jsonl` rotation); within a file,
+/// line order is preserved. Lines that fail to parse as `JournalEntry`
+/// are skipped silently (journal is append-only and forward-compatible).
+///
+/// Returns `Ok(vec![])` when `dir` does not exist or contains no matching
+/// entries. IO errors reading individual files propagate. Missing files
+/// during the scan are skipped (race-tolerant).
+pub fn load_by_trace_id(dir: &Path, trace_id: &str) -> std::io::Result<Vec<JournalEntry>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("jsonl"))
+        .collect();
+    files.sort();
+    let mut out = Vec::new();
+    for path in files {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let entry: JournalEntry = match serde_json::from_str(line) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if entry.trace_id.as_deref() == Some(trace_id) {
+                out.push(entry);
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -348,6 +391,87 @@ mod tests {
                 .collect();
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0], returned);
+        }
+    }
+
+    // --- load_by_trace_id tests --------------------------------------------
+
+    mod load_by_trace_id_tests {
+        use super::*;
+        use tempfile::tempdir;
+
+        fn entry_with_trace(trace: &str, action: &str) -> JournalEntry {
+            let mut e = JournalEntry::new("dispatcher", action);
+            e.trace_id = Some(trace.to_string());
+            e
+        }
+
+        #[test]
+        fn empty_dir_returns_empty_vec() {
+            let tmp = tempdir().unwrap();
+            let nonexistent = tmp.path().join("does_not_exist");
+            let r = load_by_trace_id(&nonexistent, "abc").unwrap();
+            assert!(r.is_empty());
+            // Existing but empty.
+            let r2 = load_by_trace_id(tmp.path(), "abc").unwrap();
+            assert!(r2.is_empty());
+        }
+
+        #[test]
+        fn single_file_filters_by_trace_id() {
+            let tmp = tempdir().unwrap();
+            let j = Journal::open(tmp.path());
+            j.append(&entry_with_trace("alpha", "a1")).unwrap();
+            j.append(&entry_with_trace("beta", "b1")).unwrap();
+            j.append(&entry_with_trace("alpha", "a2")).unwrap();
+            let r = load_by_trace_id(tmp.path(), "alpha").unwrap();
+            assert_eq!(r.len(), 2);
+            assert_eq!(r[0].action, "a1");
+            assert_eq!(r[1].action, "a2");
+        }
+
+        #[test]
+        fn multi_file_date_sorted_order() {
+            let tmp = tempdir().unwrap();
+            let j = Journal::open(tmp.path());
+            // 2 entries on 2 days; expect date-sorted order in output.
+            let mut e_old = entry_with_trace("xyz", "old");
+            e_old.ts = chrono::Utc::now() - chrono::Duration::days(1);
+            let e_new = entry_with_trace("xyz", "new");
+            // ts default is `now`.
+            j.append(&e_old).unwrap();
+            j.append(&e_new).unwrap();
+            let r = load_by_trace_id(tmp.path(), "xyz").unwrap();
+            assert_eq!(r.len(), 2);
+            assert_eq!(r[0].action, "old");
+            assert_eq!(r[1].action, "new");
+        }
+
+        #[test]
+        fn malformed_lines_are_skipped() {
+            let tmp = tempdir().unwrap();
+            let path = tmp.path().join("2026-05-18.jsonl");
+            let e1 = entry_with_trace("z", "act1");
+            let e2 = entry_with_trace("z", "act2");
+            let body = format!(
+                "{}\nnot valid json\n\n{}\n",
+                serde_json::to_string(&e1).unwrap(),
+                serde_json::to_string(&e2).unwrap(),
+            );
+            std::fs::write(&path, body).unwrap();
+            let r = load_by_trace_id(tmp.path(), "z").unwrap();
+            assert_eq!(r.len(), 2);
+            assert_eq!(r[0].action, "act1");
+            assert_eq!(r[1].action, "act2");
+        }
+
+        #[test]
+        fn non_jsonl_files_ignored() {
+            let tmp = tempdir().unwrap();
+            std::fs::write(tmp.path().join("not_journal.txt"), "garbage").unwrap();
+            std::fs::write(tmp.path().join("README.md"), "# stuff").unwrap();
+            let r = load_by_trace_id(tmp.path(), "anything").unwrap();
+            assert!(r.is_empty());
         }
     }
 
