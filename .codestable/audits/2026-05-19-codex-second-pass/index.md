@@ -70,7 +70,36 @@ Claude 漏检模式总结：
 | journal multi-proc append race | — | ⏸ 评估后接受（POSIX 单 syscall 原子）|
 | bot_cli_integration fake 矩阵过宽 | — | ⏸ 留后续，不阻塞 |
 
-**Round 4 codex 审计触发中**（agent acf2dce4f424ea3b7, task bcrr59nyy）。
+**Round 4 codex 审计结论**：发现 2 P（1 P1 + 1 P2），全已修复
+| 新发现 | Commit | 状态 |
+|---|---|---|
+| P1 budget 跨进程 RMW race → BudgetGuard flock | `b0185cb` | ✅ |
+| P2 reader memory blow-up → drain_with_head_cap | `79f036e` | ✅ |
+
+**Round 5 codex 审计结论**：发现 2 P2（都是 round-4 修复 latent bug），全已修复
+| 新发现 | Commit | 状态 |
+|---|---|---|
+| P2 drain U+FFFD 扩展溢出 cap → push_str 后二次 truncate | `de03eb5` | ✅ |
+| P2 BudgetGuard fail-open 退化到 unlocked fresh state → fail-closed GateRejected | `de03eb5` | ✅ |
+
+**Round 6 codex 审计结论**：**STOP CONDITION REACHED**
+- round-5 修复无新 latent bug
+- 全局扫描无新 P1/P2
+- 可进入 feature 推进阶段
+
+## 累计统计
+
+| 轮 | 新 finding | 修复 commit | 累计 |
+|---|---|---|---|
+| Round 2 | 10 | 18f0e32 / e290bfa / f084840 / 57d62cd / d4d70ba | 10 ✅ |
+| Round 3 | 6 + 2 partial | 1e36d9e / fe0f726 / 63c2997 | 6+2 ✅ |
+| Round 4 | 2 | b0185cb / 79f036e | 2 ✅ |
+| Round 5 | 2 | de03eb5 | 2 ✅ |
+| Round 6 | 0 | — | stop |
+| **合计** | **22 P findings** | **10 fix commits** | **全 ✅** |
+
+测试覆盖：~390 lib + 集成测试 → **418 lib + 集成测试**（+28 新覆盖 finding 行为）。
+CI：每次 push 全绿，最终 commit `de03eb5` 仍绿。
 
 ## 修复优先级建议
 
