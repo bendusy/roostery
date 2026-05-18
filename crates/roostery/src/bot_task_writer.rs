@@ -241,7 +241,22 @@ fn save_cache(
         summary: summary.to_string(),
     };
     let body = serde_json::to_vec_pretty(&entry).expect("SessionCacheEntry serializes");
-    let tmp = path.with_extension("json.tmp");
+    // codex audit round-3 finding：原 `path.with_extension("json.tmp")` 让同一
+    // (agent, session) 的并发 writer 共用 tmp 文件名。改用 pid + nanos 唯一后缀
+    // 避免 race 损坏部分写。最后 rename 是原子的（POSIX 单 inode 同 fs 内）。
+    let pid = std::process::id();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_name = format!(
+        "{stem}.tmp.{pid}.{nanos}",
+        stem = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("session"),
+    );
+    let tmp = path.with_file_name(tmp_name);
     std::fs::write(&tmp, &body).map_err(|source| TaskWriterError::CacheSaveFailed {
         path: path.to_path_buf(),
         source,
