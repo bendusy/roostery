@@ -23,6 +23,8 @@ pub enum BotSub {
     StopHook(StopHookCliArgs),
     /// 反向调用入口；任意 agent / 脚本可推送到飞书。
     Push(PushCliArgs),
+    /// 长跑 daemon：订阅 IM event → @mention 路由 → runner → 接力 task。
+    Bridge(crate::bot_bridge::cli::BridgeCliArgs),
 }
 
 #[derive(Args, Debug)]
@@ -170,6 +172,13 @@ pub fn run(args: BotArgs) -> ExitCode {
             let req = build_request_from_push_args(a, &mut stdin);
             let outcome = rt.block_on(push(req, &runner, opts.clone()));
             outcome_to_exit_code(&outcome, &opts)
+        }
+        BotSub::Bridge(a) => {
+            // 释放本函数自建的 runtime，避免与 `bridge::cli::run` 内部新建的 runtime
+            // 互相嵌套；`runner` 在 Bridge 分支不使用。
+            let _ = runner;
+            drop(rt);
+            crate::bot_bridge::cli::run(a)
         }
     }
 }

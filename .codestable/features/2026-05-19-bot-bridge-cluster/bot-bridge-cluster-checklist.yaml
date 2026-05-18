@@ -4,7 +4,7 @@ created: 2026-05-19
 steps:
   - action: "编排骨架：建 bot_bridge/ 子目录 + 7 子模块占位 + clap 子命令 Bridge 变体注册 + run_bridge 空实现 + lib.rs pub mod"
     exit_signal: "cargo build 全绿 + cargo clippy 0 警告 + `roostery bot bridge --help` 列出 --bots/--profile/--max-concurrency/--max-events/--timeout flags + 空跑（max-events=0 立即返回）退出码 0"
-    status: pending
+    status: done
 
   - action: "名词层 / 配置：role.rs 实装 BotsConfig + BotRole + BOTS_SCHEMA_VERSION=1 + load_bots + BotRoleError 4 变体 + event_matches_bot + extract_message_body"
     exit_signal: "单测覆盖 yaml roundtrip + mention 匹配三种空格 + chat_whitelist 过滤 + schema_version 缺失=1 / =2 报错 / 必填字段缺失报错；cargo test --all 全绿"
