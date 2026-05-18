@@ -173,4 +173,4 @@ checks:
 
   - item: "验收场景：GitHub Actions fmt/clippy/test 三 job 全绿"
     source: 验收场景
-    status: pending  # 待 push 后 CI 验证
+    status: passed  # CI run 26007340813（commit 4e6f441）三 job 全绿
