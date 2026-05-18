@@ -23,14 +23,13 @@ pub mod trace;
 use self::budget::{BudgetError, BudgetState};
 use self::hook_event::HookEvent;
 use self::runaway::{RunawayError, RunawayTracker};
-use self::runners::{RunOutcome, RunnerError, RunnerRegistry, RunnerStatus};
-use self::trace::{TraceContext, TraceError, TraceId};
+use self::runners::{RunOutcome, RunnerRegistry, RunnerStatus};
+use self::trace::{TraceContext, TraceId};
 use crate::config;
 use crate::config::BudgetCfg;
 use crate::journal::{Journal, JournalEntry, JournalResult};
 use crate::paths;
 use std::collections::VecDeque;
-use std::path::PathBuf;
 use thiserror::Error;
 
 /// 单次 fire 内单个 step 的 fanout 上限（防 runner 返巨量 emitted_events
@@ -409,17 +408,6 @@ fn enqueue_emitted(
 fn load_or_init_budget(cfg: &BudgetCfg) -> BudgetState {
     budget::load().unwrap_or_else(|_| BudgetState::from_cfg(cfg))
 }
-
-// suppress unused-warnings until S5 wires journal dir / paths into replay
-#[allow(dead_code)]
-fn _unused_pathbuf_hint() -> PathBuf {
-    PathBuf::new()
-}
-
-// keep TraceError / RunnerError imports referenced for clarity (errors are
-// matched-on inline via to_string()); silence "unused import" if any.
-#[allow(dead_code)]
-fn _unused_error_imports(_t: TraceError, _r: RunnerError) {}
 
 /// replay 入口——读 journal 找 trace_id 根 entry → 重建 HookEvent → 调 fire；
 /// 分配新 trace_id（不沿用），journal 加 `replay_of: <source_trace_id>` 关联。
