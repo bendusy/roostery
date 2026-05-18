@@ -353,20 +353,18 @@ pub async fn create_task(
 fn parse_task_response(response: &serde_json::Value) -> Result<TaskRef, TaskWriterError> {
     let raw_head = truncate_for_error(&response.to_string());
     let data = response.get("data").unwrap_or(response);
-    let guid = data
-        .get("guid")
-        .and_then(|v| v.as_str())
-        .ok_or(TaskWriterError::ResponseShapeUnexpected {
+    let guid = data.get("guid").and_then(|v| v.as_str()).ok_or(
+        TaskWriterError::ResponseShapeUnexpected {
             expected: "data.guid",
             raw_head: raw_head.clone(),
-        })?;
-    let url = data
-        .get("url")
-        .and_then(|v| v.as_str())
-        .ok_or(TaskWriterError::ResponseShapeUnexpected {
+        },
+    )?;
+    let url = data.get("url").and_then(|v| v.as_str()).ok_or(
+        TaskWriterError::ResponseShapeUnexpected {
             expected: "data.url",
             raw_head,
-        })?;
+        },
+    )?;
     Ok(TaskRef {
         guid: TaskGuid::from_existing(guid.to_string()),
         url: url.to_string(),
