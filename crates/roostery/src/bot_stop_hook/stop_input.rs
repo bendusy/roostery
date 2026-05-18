@@ -97,15 +97,21 @@ pub(crate) mod transcript_reader {
             if v.get("type").and_then(|x| x.as_str()) != Some("assistant") {
                 continue;
             }
-            if let Some(text) = v
+            // codex audit finding-10：content 数组首项可能是 tool_use / tool_result block，
+            // text block 在第二/三项。遍历全数组取第一个非空 text 字段，而不是
+            // 固定 [0].text。
+            let content_arr = v
                 .get("message")
                 .and_then(|m| m.get("content"))
-                .and_then(|c| c.get(0))
-                .and_then(|first| first.get("text"))
-                .and_then(|t| t.as_str())
-                && !text.is_empty()
-            {
-                return Ok(truncate_utf8(text, max_bytes).to_string());
+                .and_then(|c| c.as_array());
+            if let Some(arr) = content_arr {
+                for block in arr {
+                    if let Some(text) = block.get("text").and_then(|t| t.as_str())
+                        && !text.is_empty()
+                    {
+                        return Ok(truncate_utf8(text, max_bytes).to_string());
+                    }
+                }
             }
         }
         Err(TranscriptReadError::NoAssistantMessage)
@@ -178,6 +184,55 @@ mod tests {
         .unwrap();
         let err =
             transcript_reader::read_last_assistant_text(tmp.path(), 200).expect_err("no assistant");
+        assert!(matches!(
+            err,
+            transcript_reader::TranscriptReadError::NoAssistantMessage
+        ));
+    }
+
+    #[test]
+    fn transcript_reader_picks_text_after_tool_use_block() {
+        // codex audit finding-10：content 首项是 tool_use block，text 在第 2 项。
+        // 旧实现固定取 [0].text 会返 None；新实现遍历找第一个非空 text。
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut f = tmp.reopen().expect("reopen");
+        writeln!(
+            f,
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"Read"}},{{"type":"text","text":"here's the answer"}}]}}}}"#
+        )
+        .unwrap();
+        let out = transcript_reader::read_last_assistant_text(tmp.path(), 200).expect("read");
+        assert_eq!(out, "here's the answer");
+    }
+
+    #[test]
+    fn transcript_reader_skips_empty_text_blocks() {
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut f = tmp.reopen().expect("reopen");
+        // 多 block：第一个 text 为空，第二个非空。
+        writeln!(
+            f,
+            r#"{{"type":"assistant","message":{{"content":[{{"text":""}},{{"text":"non-empty"}}]}}}}"#
+        )
+        .unwrap();
+        let out = transcript_reader::read_last_assistant_text(tmp.path(), 200).expect("read");
+        assert_eq!(out, "non-empty");
+    }
+
+    #[test]
+    fn transcript_reader_all_tool_use_no_text_returns_err() {
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut f = tmp.reopen().expect("reopen");
+        writeln!(
+            f,
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"Read"}}]}}}}"#
+        )
+        .unwrap();
+        let err =
+            transcript_reader::read_last_assistant_text(tmp.path(), 200).expect_err("all tool_use");
         assert!(matches!(
             err,
             transcript_reader::TranscriptReadError::NoAssistantMessage
