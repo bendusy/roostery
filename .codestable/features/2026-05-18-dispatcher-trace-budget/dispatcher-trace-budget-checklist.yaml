@@ -4,172 +4,172 @@ created: 2026-05-18
 steps:
   - action: "S1 名词层基底 trace：新建 src/trace.rs 含 TraceId(String) #[serde(transparent)] newtype + TraceContext #[non_exhaustive] struct（trace_id/parent_event_id/depth/max_depth）+ TraceError #[non_exhaustive] 2 变体（DepthExceeded / EnvParseFailed）+ 3 env key const（ROOSTERY_TRACE_ID / ROOSTERY_DEPTH / ROOSTERY_PARENT_EVENT_ID）；fn 签名 todo!()"
     exit_signal: "cargo build 成功；TraceId serde transparent 单测（裸字符串）；TraceError display 单测；trace_id_const_length 单测（32 chars）"
-    status: pending
+    status: done
 
   - action: "S2 trace 计算实装：new_root（getrandom 16 byte hex）/ child（trace_id 不变 depth +1）/ check_depth / to_env_pairs / from_env / stamp_journal 完整实现；depth 从 0 起"
     exit_signal: "trace 6+ 单测全绿：new_root depth=0 / child depth+1 / depth=max 报错 / depth=max-1 通过 / env round-trip 完整 / from_env 缺 trace_id 返 None / from_env depth 非数字返 EnvParseFailed / stamp_journal 字段对齐 + 其他字段不动"
-    status: pending
+    status: done
 
   - action: "S3 名词层基底 budget：新建 src/budget.rs 含 Bucket struct（calls/cost_usd/max_calls/max_cost_usd）+ BudgetState #[non_exhaustive] struct（schema_version=1 const / day NaiveDate / default Bucket）+ BudgetError #[non_exhaustive] 5 变体（LoadFailed/ParseFailed/SaveFailed/Exceeded/SchemaVersionMismatch）；paths.rs 加 budget_state_path() fn"
     exit_signal: "cargo build 成功；Bucket::would_exceed 边界 3 单测（calls 超 / cost 超 / 同时不超）"
-    status: pending
+    status: done
 
   - action: "S4 budget 计算 + 持久化：from_cfg / roll_over_if_needed / check_or_raise（内部先 rollover）/ consume / load / load_from / save / save_to（atomic .tmp + rename + parent dir 自建）；JSON pretty + \\n trailing"
     exit_signal: "budget 8+ 单测：from_cfg 字段对齐 / rollover happy / rollover 同日二次返 false / check_or_raise 含 rollover / consume 增量 / save atomic 无 .tmp 残留 / load 文件不存在 LoadFailed / load 非法 JSON ParseFailed / schema_version=2 SchemaVersionMismatch"
-    status: pending
+    status: done
 
   - action: "S5 名词层基底 runaway：新建 src/runaway.rs 含 RunawayTracker（window/threshold/fires BTreeMap/clock Box<dyn Fn>）+ RunawayError #[non_exhaustive] 1 变体（Detected）；默认 window=300s threshold=10 const"
     exit_signal: "cargo build 成功；RunawayError display 单测；DEFAULT_WINDOW_SECS / DEFAULT_THRESHOLD const 暴露单测"
-    status: pending
+    status: done
 
   - action: "S6 runaway 计算实装：new / with_window_and_threshold / with_clock / record（清窗口外 + 追加 + 返窗内 count）/ check（>=threshold 报错）"
     exit_signal: "runaway 5+ 单测：单次 record 返 1 / 累计返值递增 / 超阈值 check Err Detected / 注入 clock 模拟过窗口后清理 / 不同 trace_id 互不影响"
-    status: pending
+    status: done
 
   - action: "S7 模块挂载 + 集成测试：lib.rs 加 pub mod trace/budget/runaway；新建 tests/trace_budget_integration.rs 串场景（trace+stamp_journal byte-for-byte / budget save→load 真磁盘 roundtrip / runaway tracker 时间线推进）"
     exit_signal: "lib.rs 3 mod 暴露；集成测试 3+ 全绿；既有 testsuite 无回归"
-    status: pending
+    status: done
 
   - action: "S8 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；N1-N9 + as_object_mut.unwrap 守护 grep 0 命中；推 CI 验三 job"
     exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表全 0 命中"
-    status: pending
+    status: done
 
 checks:
   - item: "src/trace.rs 存在；TraceContext #[non_exhaustive] 4 字段（trace_id/parent_event_id/depth/max_depth）"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "TraceId newtype + #[serde(transparent)] + new_random/as_str/from_existing API"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "TraceError #[non_exhaustive] 2 变体 DepthExceeded + EnvParseFailed"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "trace env key 3 个 const ROOSTERY_TRACE_ID / ROOSTERY_DEPTH / ROOSTERY_PARENT_EVENT_ID（不沿用 FEISHU_HUB_*）"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "src/budget.rs 存在；BudgetState #[non_exhaustive]（schema_version/day/default）+ Bucket（calls/cost_usd/max_calls/max_cost_usd）"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "BudgetError #[non_exhaustive] 5 变体（LoadFailed/ParseFailed/SaveFailed/Exceeded{kind,reason}/SchemaVersionMismatch{found,expected}）"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "budget 4 公开 fn load/load_from/save/save_to + atomic .tmp + rename + parent dir 自建"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "src/runaway.rs 存在；RunawayTracker 含 window/threshold/fires/clock；RunawayError #[non_exhaustive] Detected 变体"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "paths::budget_state_path() 加到 paths.rs"
     source: 名词契约
-    status: open
+    status: passed
 
   - item: "lib.rs 顶层 pub mod trace; pub mod budget; pub mod runaway; 三 mod 暴露"
     source: 挂载点
-    status: open
+    status: passed
 
   - item: "Cargo.toml 无新增依赖（trace 用 getrandom 既有；budget 用 serde_json + chrono 既有；runaway std-only）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 1：TraceContext 不可变（new_root/child 返新值；stamp_journal 仅借用 mut entry 字段）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 2：depth 单调递增（child() 总 +1，无 decrement API）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 3：budget save atomic（.tmp + rename + parent 自建）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 4：budget rollover 幂等（同日多次调无副作用）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 5：budget schema_version=1 公开承诺（bump 需 cs-roadmap update + 旧版兼容）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 6：runaway 内存隔离（tracker drop 即丢，不持久化）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "不变量 7：runaway 窗口清理懒计算（每次 record 时清理过期，不开后台 thread）"
     source: 流程级约束
-    status: open
+    status: passed
 
   - item: "idiom #1 强类型 schema：TraceContext / BudgetState / Bucket / RunawayTracker 全 struct；budget.json 反序列化用强类型不用 serde_json::Value"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "idiom #2 error 变体颗粒度：TraceError / BudgetError / RunawayError 各自 #[non_exhaustive] enum 细变体，无 String reason 打包多种"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "idiom #3 newtype：TraceId(String) #[serde(transparent)]（与 business-identifier-newtype decision 一致）"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "idiom #4 typestate：本 feature 不引入（trace ctx 即用即弃；budget check/consume 分离已够强）"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "idiom #5 零拷贝：env key const &'static str；stamp_journal &mut entry 借用更新；budget rollover &mut state"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "idiom #6 编译期：env key 名 const / DEFAULT_WINDOW_SECS / DEFAULT_THRESHOLD / BUDGET_SCHEMA_VERSION const"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "守护 grep N1：grep -E 'Runner|RunnerKind|runner_registry' src/{trace,budget,runaway}.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N2：grep -E 'Rule|rules::' src/{trace,budget,runaway}.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N3：grep -E 'Loop|loop_|EventQueue|dispatch' src/{trace,budget,runaway}.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N4：grep -E 'per_runner|by_rule|by_runner' src/budget.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N5：grep -E 'fs::write|save|load' src/runaway.rs → 0 命中（runaway 不持久化）"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N6：grep 'FEISHU_HUB_' src/{trace,budget,runaway}.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N7：grep 'uuid|ulid_rs|crossbeam|moka' crates/roostery/Cargo.toml → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N8：grep 'Command::Budget|Command::Trace|Command::Runaway' src/main.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep N9：grep -E 'LarkRunner|lark_cli::' src/{trace,budget,runaway}.rs → 0 命中"
     source: 明确不做
-    status: open
+    status: passed
 
   - item: "守护 grep rust-idiom-first：grep -rE 'as_object_mut\\(\\)\\.unwrap\\(\\)|as_array_mut\\(\\)\\.unwrap\\(\\)' src/{trace,budget,runaway}.rs → 0 命中"
     source: idiom checklist
-    status: open
+    status: passed
 
   - item: "CI 三 job（fmt / clippy / test）远端全绿"
     source: 模块级
@@ -177,4 +177,4 @@ checks:
 
   - item: "cargo test --doc 全绿（本 feature 各模块 doc-comment 含简短示例）"
     source: 模块级
-    status: open
+    status: passed

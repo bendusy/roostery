@@ -45,6 +45,10 @@ pub fn env_file() -> PathBuf {
     roostery_home().join("env")
 }
 
+pub fn budget_state_path() -> PathBuf {
+    state_dir().join("budget.json")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
