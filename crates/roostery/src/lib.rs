@@ -2,6 +2,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const SCHEMA_VERSION: u32 = 1;
 
 pub mod agent_detect;
+pub mod bot_task_writer;
 pub mod config;
 pub mod dispatcher;
 pub mod hooks_merge;

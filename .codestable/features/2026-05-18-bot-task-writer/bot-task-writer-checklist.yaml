@@ -4,188 +4,188 @@ created: 2026-05-18
 steps:
   - action: "S1 类型骨架：新建 src/bot_task_writer.rs；TaskRef / TaskGuid (newtype serde transparent) / TaskWriterError #[non_exhaustive] 5 变体 / CreateTaskOptions / AppendStepsOptions（#[non_exhaustive] + Default + lifetime borrow）类型定义；create_task / append_steps / get_or_create_for_session 三 pub fn 签名 todo!()；SESSION_CACHE_SCHEMA_VERSION: u32 = 1 + DEFAULT_HOST_FALLBACK: &str const"
     exit_signal: "cargo build 成功；类型 trivial 单测（TaskGuid serde transparent / TaskWriterError display / const 暴露）3+"
-    status: pending
+    status: done
 
   - action: "S2 host suffix helper：fn host_default() -> String（ROOSTERY_HOST env > hostname 首段 > DEFAULT_HOST_FALLBACK 三 fallback 链）；fn apply_host_suffix(summary, host) -> String（幂等检测：summary 已含 '· {host}' 不重复加）"
     exit_signal: "4 单测（env 命中 / hostname fallback / unknown 兜底 / 已含后缀幂等）"
-    status: pending
+    status: done
 
   - action: "S3 safe_filename helper：fn safe_filename(agent, session) -> String；非 [A-Za-z0-9._-] 字符替换 _；连续 .. 替换 __；末尾加 .json"
     exit_signal: "3 单测（普通名 / 特殊字符如 / \\ 空格替换 / .. 路径攻击防御）"
-    status: pending
+    status: done
 
   - action: "S4 session cache layer：fn session_cache_dir() -> PathBuf（~/.roostery/state/session_tasks/，缺父目录自建）；fn load_cache(path) -> Result<Option<TaskRef>, TaskWriterError>；fn save_cache(path, &TaskRef, summary) -> Result<(), TaskWriterError>；JSON schema_version=1 + atomic .tmp + rename；schema_version 缺失向后兼容"
     exit_signal: "4 单测（empty load 返 None / save 后 load round-trip / atomic 写不留 .tmp / schema_version 缺失旧版兼容 read）"
-    status: pending
+    status: done
 
   - action: "S5 create_task 主流程：build argv 'task +create --as bot --summary ... [--description] [--assignee] [--idempotency-key]'；assignee 解析：opts 优先，None 走 identity::current 注入；summary 加 host suffix；runner.run(&argv) → 解 stdout JSON data.guid / data.url → TaskRef；errors 走 LarkCallFailed / ResponseShapeUnexpected / IdentityResolveFailed"
     exit_signal: "5 单测（MockLarkRunner happy 返 TaskRef / lark err 透传 LarkCallFailed / 缺 data.guid → ResponseShapeUnexpected / assignee opts 优先 / assignee None 走 identity）"
-    status: pending
+    status: done
 
   - action: "S6 append_steps：argv 'task agent_task_step_info append_task_steps --as bot --data {json} --yes'；空 steps 短路 Ok(())；data json = {task_guid, task_steps: [{content}]} + 可选 idempotent_key"
     exit_signal: "3 单测（empty steps Mock 0 调用 / 3 steps argv 含 --yes + --data / lark err 透传）"
-    status: pending
+    status: done
 
   - action: "S7 get_or_create_for_session：拼 cache path → load_cache → Some 返 cached / None 调 create_task + save_cache + 返；create_task idempotency_key 默认 'agent-session-{session}'"
     exit_signal: "3 单测（首次 create + save / 二次 hit 不调 create_task / cache 损坏自然走 create）"
-    status: pending
+    status: done
 
   - action: "S8 集成测试 + 模块挂载：lib.rs 加 pub mod bot_task_writer；新建 tests/bot_task_writer_integration.rs：MockLarkRunner enqueue 多次 + 真 ~/.roostery/ tempdir 隔离（ROOSTERY_HOME env）+ 端到端 e2e（create → append → second get_or_create hit cache）"
     exit_signal: "lib.rs 1 mod 暴露；集成测试 3+ 全绿"
-    status: pending
+    status: done
 
   - action: "S9 完整验收 + 守护 grep + CI：cargo test --all + cargo test --doc + cargo clippy --all-targets --all-features -- -D warnings + cargo fmt --all --check 四命令本地全绿；N1-N12 + idiom grep 0 命中；推 CI 验三 job"
     exit_signal: "本地四命令全绿；远端 CI 全绿；守护 grep 表全 0 命中"
-    status: pending
+    status: done
 
 checks:
   - item: "src/bot_task_writer.rs 存在；三 pub fn 全 async（runner.run async）"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "TaskRef 2 字段（guid: TaskGuid / url: String）全 pub"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "TaskGuid newtype #[serde(transparent)] + as_str / from_existing API；与 business-identifier-newtype decision 一致"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "TaskWriterError #[non_exhaustive] 5 变体（LarkCallFailed / ResponseShapeUnexpected / CacheLoadFailed / CacheSaveFailed / IdentityResolveFailed）"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "CreateTaskOptions / AppendStepsOptions #[non_exhaustive] + Default + lifetime borrow"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "SESSION_CACHE_SCHEMA_VERSION: u32 = 1 + DEFAULT_HOST_FALLBACK: &str 公开 const"
     source: 名词契约
-    status: pending
+    status: done
 
   - item: "lib.rs 加 pub mod bot_task_writer; 1 mod 暴露"
     source: 挂载点
-    status: pending
+    status: done
 
   - item: "Cargo.toml 0 新增依赖（thiserror / serde / serde_json / tracing 全部既有）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 1：三 pub fn 都 take &dyn LarkRunner 依赖注入"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 2：不绕过 LarkRunner trait（红线 N3 / N4 守护）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 3：host suffix 幂等检测"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 4：session cache atomic 写（.tmp + rename + 父目录自建）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 5：safe_filename 路径跳出防御（.. → __）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 6：append_steps --yes 始终带（架构红线破例，模块顶部 doc 显式标）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 7：empty steps 短路 Ok(())"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 8：本模块 fn 不耦合 caller 编排（part fail 语义在 caller）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 9：host fallback 链 opts.host > ROOSTERY_HOST > hostname > DEFAULT_HOST_FALLBACK"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "不变量 10：assignee None 走 identity::current；identity 失败返 Err（不 silently 不带 assignee）"
     source: 流程级约束
-    status: pending
+    status: done
 
   - item: "idiom #1 强类型：TaskRef / TaskGuid / SessionCacheEntry 全 struct/newtype；lark-cli JSON 用 serde struct 中间 deserialize"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #2 error 颗粒度：TaskWriterError 5 变体细分；与 LarkError / IdentityError 分层不混"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #3 newtype：TaskGuid #[serde(transparent)] 与 business-identifier-newtype decision 一致"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #4 typestate：不引入"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #5 零拷贝：三 pub fn 参数全借用（&dyn LarkRunner / &str）；返 owned TaskRef（小 struct 简化）"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "idiom #6 编译期：SESSION_CACHE_SCHEMA_VERSION / DEFAULT_HOST_FALLBACK const"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "守护 grep N1：grep -E 'impl Runner for|BotTaskWriterRunner' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N2：grep 'FEISHU_HUB_' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N3：grep -E 'Command::new|std::process::Command|tokio::process' crates/roostery/src/bot_task_writer.rs → 0 命中（必经 LarkRunner trait）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N4：grep -E 'reqwest|openai|anthropic' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N5：grep -E 'im_send|fallback_im' crates/roostery/src/bot_task_writer.rs → 0 命中（IM 兜底归 bot-stop-hook）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N6：grep -E 'task_status_update|task_close|task_delete|task_complete' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N7：grep -E 'create_tasks_batch|batch_create|bulk_create' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N8：grep -E 'task_list|list_tasks|query_task' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N9：grep -E 'multi_assignee|followers' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N10：grep -E 'Command::Bot|Command::Task' crates/roostery/src/main.rs → 0 命中（本期不暴露 CLI 子命令）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N11：本期不动 templates/agent_stop_notify.sh（git diff 0）"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep N12：grep -E 'cache_gc|cache_ttl|cache_cleanup' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: 明确不做
-    status: pending
+    status: done
 
   - item: "守护 grep rust-idiom-first：grep -rE 'as_object_mut\\(\\)\\.unwrap\\(\\)|as_array_mut\\(\\)\\.unwrap\\(\\)' crates/roostery/src/bot_task_writer.rs → 0 命中"
     source: idiom checklist
-    status: pending
+    status: done
 
   - item: "CI 三 job（fmt / clippy / test）远端全绿"
     source: 模块级
