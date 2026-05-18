@@ -12,7 +12,7 @@ steps:
 
   - action: "计算节点（HITL + 进程内信号通道）：hitl.rs 实装 classify + 4 abort 关键词 + 4 adjust 前缀；active_registry.rs 实装 ActiveRunnerRegistry + RunnerHandle + oneshot HitlSignal"
     exit_signal: "单测覆盖 4 abort 命中 / 4 adjust 命中 / adjust 空 body 退化 Pass / 非命中 Pass；oneshot send → receive 信号传递正确；lookup_by_chat_id 多 task 命中第一个"
-    status: pending
+    status: done
 
   - action: "编排节点：runner.rs 实装 handle_event（注入 dyn LarkRunner + RunnerRegistry + ActiveRunnerRegistry）+ ADJUST_MAX 循环 + BotAction + HandleEventError"
     exit_signal: "单测用 MockLarkRunner + 假 Runner 注入 + 覆盖 4 outcome (Success / Failed / Aborted / Timeout) + Adjust 重启路径（attempts=1 终态 / attempts 触上限 aborted）；runner kind 未注册路径返 Skipped + journal 落档"

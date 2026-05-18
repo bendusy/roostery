@@ -33,7 +33,7 @@ pub struct TaskRef {
 /// 飞书 task guid newtype。与 `business-identifier-newtype` decision 一致：
 /// 从飞书侧拿到的、有明确业务语义的标识符隔离类型，避免与 `task_url` /
 /// `event_id` / `trace_id` 等 id-like 字符串互换。
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
 pub struct TaskGuid(String);
 
