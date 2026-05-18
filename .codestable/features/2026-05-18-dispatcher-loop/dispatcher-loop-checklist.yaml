@@ -197,4 +197,4 @@ checks:
 
   - item: "CI 三 job（fmt / clippy / test）远端全绿"
     source: 模块级
-    status: pending
+    status: done
