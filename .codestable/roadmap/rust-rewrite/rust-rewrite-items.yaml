@@ -117,10 +117,10 @@ items:
   - slug: bot-task-writer
     description: Task writer 创建 Feishu task + append step stream + session cache
     depends_on: [lark-cli-wrapper, journal-core, config-yaml]
-    status: planned
-    feature: null
+    status: in-progress
+    feature: 2026-05-18-bot-task-writer
     minimal_loop: false
-    notes: "Phase 5；session cache schema 重新设计"
+    notes: "Phase 5 Module F 第 1 子 feature；session cache 本地 schema 重新设计 schema_version=1 不继承 Python 版。Design 关键决策（user 拍板 2026-05-18）：(a) 纯库 API 3 pub fn（create_task / append_steps / get_or_create_for_session），不挂 dispatcher registry；(b) host suffix 保留（ROOSTERY_HOST env > hostname 首段，Python parity）；(c) 部分失败 Ok(TaskRef) + 独立 log；(d) append_steps --yes 始终带（架构红线显式破例：bot 写自己创建的 task = agent 内部行为，acceptance 阶段进 ARCHITECTURE §5/§6 归档）；(e) assignee None 走 identity::current，失败返 Err 不 silent fallback。首次让 Rust 业务模块真消费 LarkRunner trait 做生产飞书 IO"
 
   - slug: bot-stop-hook
     description: Stop hook 入口，原生处理 stdin JSON event，task_writer 主路径 + IM 兜底
