@@ -28,7 +28,6 @@ use self::trace::{TraceContext, TraceId};
 use crate::config;
 use crate::config::BudgetCfg;
 use crate::journal::{Journal, JournalEntry, JournalResult};
-use crate::paths;
 use std::collections::VecDeque;
 use thiserror::Error;
 
@@ -116,7 +115,9 @@ pub async fn fire(
     // 准备外部状态：budget / runaway 跨 step 共享。
     let mut budget_state = load_or_init_budget(&cfg.budgets.default);
     let mut runaway = RunawayTracker::new();
-    let journal = Journal::open(paths::journal_dir());
+    // 用配置的 journal 目录（codex audit finding-08 修复）——`paths::journal_dir()`
+    // 是 default 值，但 cfg.journal.dir 才是配置的 source of truth。
+    let journal = Journal::open(cfg.journal.dir.clone());
 
     // BFS 队列：(event, ctx)。
     let mut queue: VecDeque<(HookEvent, TraceContext)> = VecDeque::new();
@@ -281,7 +282,9 @@ async fn process_one(
             if outcome.cost_usd.is_none() {
                 budget_state.consume(0.0);
             }
-            let _ = budget::save(budget_state);
+            if let Err(e) = budget::save(budget_state) {
+                tracing::error!(error = %e, "budget save failed; next invocation may see stale state");
+            }
 
             // 链式分发 emitted_events（S4 实现：受 DEFAULT_MAX_FANOUT 截断 + ctx.child）
             let fanout = enqueue_emitted(queue, &ctx, &base.event_id, outcome.emitted_events);
@@ -398,9 +401,34 @@ fn enqueue_emitted(
     take
 }
 
-/// 加载或初始化 BudgetState。文件不存在 / 加载失败时 fallback 到 from_cfg。
+/// 加载或初始化 BudgetState。
+///
+/// **codex audit finding-05**：原实现 `unwrap_or_else(|_| from_cfg)` 把所有错误
+/// （含文件损坏 / parse 失败 / schema mismatch）都当首次运行重置。这让 budget 文件
+/// 因 disk 错误或人为篡改损坏时，预算 gate 被静默旁路。修复后区分两类：
+/// - LoadFailed 且 `NotFound`：合法首次运行，无需 log
+/// - 其他所有错误：可疑（disk / parse / schema），tracing::error 大声 log 让 operator
+///   注意。仍 fallback 到 fresh state 避免阻塞主流程，但 operator 能从 log 看到
+///   "budget 被重置"信号，去查 `~/.roostery/state/budget.json` 状态。
 fn load_or_init_budget(cfg: &BudgetCfg) -> BudgetState {
-    budget::load().unwrap_or_else(|_| BudgetState::from_cfg(cfg))
+    match budget::load() {
+        Ok(state) => state,
+        Err(BudgetError::LoadFailed { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            // 合法首次运行——budget.json 文件还未创建。
+            BudgetState::from_cfg(cfg)
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "budget state load failed; falling back to fresh state from config — \
+                 investigate ~/.roostery/state/budget.json (disk error / parse error / \
+                 schema mismatch) before next run"
+            );
+            BudgetState::from_cfg(cfg)
+        }
+    }
 }
 
 /// replay 入口——读 journal 找 trace_id 根 entry → 重建 HookEvent → 调 fire；
@@ -413,7 +441,8 @@ pub async fn replay(
     rules: &[rules::CompiledRule],
     cfg: &config::Config,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let dir = paths::journal_dir();
+    // codex audit finding-08：用配置的 journal 目录而非 paths::journal_dir() 默认。
+    let dir = cfg.journal.dir.clone();
     if !dir.exists() {
         return Err(DispatchError::JournalDirNotFound(dir));
     }
