@@ -101,10 +101,10 @@ items:
   - slug: dispatcher-runners
     description: Runner trait（§4.3）+ cc_headless / codex_exec / gemini_headless / noop 默认实现 + runner_registry
     depends_on: [dispatcher-trace-budget, lark-cli-wrapper]
-    status: in-progress
+    status: done
     feature: 2026-05-18-dispatcher-runners
     minimal_loop: false
-    notes: "Phase 4；首发 cc_headless 即可工作，其他可 stub（runtime-neutral req 允许）"
+    notes: "Phase 4；首发实际落地 = noop + cc_headless（codex_exec / gemini_headless 完全不出现，推后到真有需求时新增 feature 加 impl，runtime-neutral req 允许）。**与 §4.3 偏离**（user 拍板）：(a) Runner::run 不收 &BudgetGate 参数（budget gate 编排留给 dispatcher-loop）；(b) RunOutcome 加 cost_usd: Option<f64> 字段。建议后续 cs-roadmap update 把 §4.3 原契约改齐。Accepted 2026-05-18（commit 1716a38，CI run f56a20c）"
 
   - slug: dispatcher-loop
     description: Loop + Event bridge + roostery dispatcher 子命令（fire / replay / test-rule）

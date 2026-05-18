@@ -64,6 +64,12 @@
 | `RULES_SCHEMA_VERSION` | `rules.rs:31` 公开 const `= 1`。公开承诺：bump 需 `cs-roadmap update` + 旧版兼容反序列化 |
 | `SELF_EVENT_PREFIXES` | `rules.rs:33` 内部 const `&["dispatcher.", "roostery."]`——`matches` 第一步是 self-event 短路（防 dispatcher 自激）。`hook_source` 前缀任一命中即返 `None`，**剩余规则不评估** |
 | `RuleName` | `rules.rs:37` `(String)` `#[serde(transparent)]` newtype（与 `business-identifier-newtype` decision 一致）。`Ord` derive 用于 `BTreeSet` 重名 grep。构造器 `RuleName::new(impl Into<String>)`（不是 `from_str`——避免与 `std::str::FromStr` 撞名 clippy 警告）|
+| `Runner` trait | Phase 4 落地的 `crates/roostery/src/runners.rs`（feature `2026-05-18-dispatcher-runners`，roadmap §4.3）。`#[async_trait] pub trait Runner: Send + Sync { fn kind(&self) -> &'static str; async fn run(event: &HookEvent, ctx: &TraceContext, args: &Value) -> Result<RunOutcome, RunnerError>; }`。**与 §4.3 偏离**（user 拍板）：`run` 不收 `&BudgetGate` 参数（budget gate 留给 dispatcher-loop 编排）；`RunOutcome` 加 `cost_usd: Option<f64>` 字段让 caller 走 `budget.consume`。每个 runtime adapter（noop / cc_headless / 未来 codex_exec / gemini_headless）实装一个 `impl Runner` 挂入 `RunnerRegistry`，对 dispatcher-loop 编排零耦合（兑现 `runtime-neutral` req）|
+| `RunOutcome` / `RunnerStatus` / `RunnerError` | `runners.rs`。`RunOutcome` 5 字段（`status: RunnerStatus / stdout: String / stderr: String / emitted_events: Vec<HookEvent> / cost_usd: Option<f64>`）。`RunnerStatus` 三态 `Success / Failed { reason } / Skipped { reason }`（`#[serde(tag = "kind", rename_all = "snake_case")]`）。`RunnerError` `#[non_exhaustive]` 4 变体（`BinaryNotFound / SpawnFailed / Timeout / OutputParseFailed`）—— **基础设施失败**（spawn / timeout / 解析）；与 `RunOutcome.status.Failed`（**runner 业务失败**，跑完了但 exit code 非 0）语义分层 |
+| `RunnerRegistry` | `runners.rs`。`Vec<Box<dyn Runner>>` linear-scan registry（n=2-4，O(n) 可忽略）。公开 API：`new() / with_runner(Box<dyn Runner>) -> Self / with_defaults() -> Self / find(&str) -> Option<&dyn Runner> / len / is_empty`。`with_defaults` 自动注册 `NoopRunner` + `CcHeadlessRunner`；同 kind 二次注册 linear find 返第一（用户责任不报错）|
+| `NoopRunner` / `CcHeadlessRunner` | `runners.rs`。Phase 4 dispatcher-runners 首发两实装。`NoopRunner::kind() == "noop"`，`run` 返 `RunOutcome { status: Success, stdout/stderr/emitted_events 空, cost_usd: None }`。`CcHeadlessRunner::kind() == "cc_headless"`，调 `claude -p <prompt> --output-format json [--model <m>] [--resume <id>]`；`bin_override: Option<PathBuf>` 测试可注入；走 `tokio::task::spawn_blocking` 包同步 `std::process::Command`（不引 `tokio::process` 避 ETXTBSY race）；stdout JSON parse 解 `cost_usd / result / text`，**解析失败仍返 Success cost None**；timeout 走 `args.timeout_ms` 覆盖 `DEFAULT_TIMEOUT_MS`。`emitted_events` 本期始终空 Vec（chain dispatch 推给 dispatcher-loop）|
+| `SAFE_ENV_FORWARD` | `runners.rs:36` 公开 `&[&'static str]` const allowlist。子进程 env 经此过滤——父 hook 状态（如 `ROOSTERY_AGENT`）**不串到子 agent**避 trace 链断裂。覆盖：POSIX baseline（USER/LOGNAME/SHELL/TMPDIR）+ XDG_* + 代理（HTTP_PROXY etc.）+ TLS CA + API keys（ANTHROPIC/OPENAI/GEMINI/GOOGLE）+ Custom base URLs + 各 vendor config dirs。私有 helper `prep_env(ctx, kind)` 合并 allowlist + POSIX 兜底（PATH/HOME/LANG/TERM）+ trace 三 env（`to_env_pairs()`）|
+| `DEFAULT_TIMEOUT_MS` / `STDOUT_HEAD_CAP` | `runners.rs:30-31` 公开 const，分别 `600_000` (10 min) / `4096` (4 KiB)。CcHeadless 默认 timeout + stdout/stderr 截断阈值 |
 
 ### State ownership
 
@@ -216,7 +222,16 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 - 不变量：TraceContext 不可变（new_root/child 返新值；stamp_journal 仅借用 mut entry 字段）；depth 单调递增（child 总 +1，无 decrement API）；budget save atomic（.tmp + rename + 父目录自建）；budget rollover 幂等（同日多次调无副作用）；BUDGET_SCHEMA_VERSION=1 公开承诺；runaway tracker drop 即丢；runaway 窗口清理懒计算（record 时 retain）
 - Cargo.toml 0 新增依赖（trace 用 getrandom 既有；budget 用 serde_json + chrono 既有；runaway std-only）；测试用 atomic clock 不触碰 env，三模块设计上独立于 env 状态
 
-- 子 feature：**`dispatcher-trace-budget`（done）** / **`dispatcher-rules`（done）** / `dispatcher-runners` / `dispatcher-loop`
+- 子 feature：**`dispatcher-trace-budget`（done）** / **`dispatcher-rules`（done）** / **`dispatcher-runners`（done）** / `dispatcher-loop`
+
+**runners 模块**（已落地，feature `2026-05-18-dispatcher-runners`，Phase 4 第 3 子 feature）：
+
+- 新文件 `crates/roostery/src/runners.rs`（产品 ~465 行 + 24 内联测）；`lib.rs` 加 1 pub mod；新依赖 `async-trait`（trait async method）/ `which`（PATH 查找 `claude` binary）/ `tempfile`（dev-dep，test fixture）；无 reqwest / 外部 LLM client；不引 `tokio::process` / `tokio::time::timeout`
+- 公开 API：
+  - `runners::{Runner, RunnerStatus, RunOutcome, RunnerError, RunnerRegistry, NoopRunner, CcHeadlessRunner, SAFE_ENV_FORWARD, DEFAULT_TIMEOUT_MS, STDOUT_HEAD_CAP}`
+- 设计约束（user 拍板，acceptance 阶段已建议走 `cs-roadmap update` 同步 §4.3 契约）：(a) `Runner::run` **不收** `&BudgetGate` 参数（与 roadmap §4.3 偏离）——budget 编排留给 dispatcher-loop；(b) `RunOutcome` 加 `cost_usd: Option<f64>` 字段——让 caller 走 `budget.consume(cost_usd)`；(c) 首发 = `noop` + `cc_headless` 真实现（codex_exec / gemini_headless 完全不出现，items.yaml notes 明示可推后）；(d) 内部走 `tokio::task::spawn_blocking` 包同步 `std::process::Command`（async trait 兼容 + 不踩 ETXTBSY race）；(e) env sanitize 走 `SAFE_ENV_FORWARD` const allowlist 而非父进程整盘 copy；(f) CC JSON 解析容错——失败仍返 Success cost None
+- 不变量：`RunnerError` vs `RunOutcome.status.Failed` 语义分层（基础设施失败 vs runner 业务失败）；`emitted_events` 本期 cc_headless 始终空 Vec（chain dispatch 推给 dispatcher-loop）；registry find 未命中返 None 不报错；同 kind 二次注册 linear find 返第一；trace env 注入经 `trace::to_env_pairs()` 三 env（`ROOSTERY_TRACE_ID` / `ROOSTERY_DEPTH` / `ROOSTERY_PARENT_EVENT_ID`），覆盖父 env collide
+- caller 编排预期（dispatcher-loop 后续 feature 拼）：`registry.find(m.runner) → runner.run(event, ctx, m.args) → match outcome.status { Success → budget.consume(cost_usd if Some) → journal; Failed/Skipped → log + skip consume → journal }`
 
 **hook_event / rules 模块**（已落地，feature `2026-05-18-dispatcher-rules`，Phase 4）：
 
@@ -251,7 +266,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 |---|---|---|---|
 | 4.1 | `LarkRunner` trait | E/F/G/H → C | Phase 2 |
 | 4.2 | `JournalEntry` schema | C/E/F 写 → 用户/社区读 | Phase 1 |
-| 4.3 | `Runner` trait | E → 具体 runner | Phase 4 |
+| 4.3 | `Runner` trait | E → 具体 runner | Phase 4 — **已落地**（feature `2026-05-18-dispatcher-runners`）；**与 §4.3 原契约偏离两项**：(a) `run` 不收 `&BudgetGate` 参数（budget gate 编排留给 dispatcher-loop）；(b) `RunOutcome` 加 `cost_usd: Option<f64>` 字段。建议 `cs-roadmap update` 把 §4.3 原文改齐 |
 | 4.4 | `HookEvent` schema | D/E → E | Phase 3-4 — **已落地**（feature `2026-05-18-dispatcher-rules`） |
 | 4.5 | `TraceContext` | E → F → C | Phase 4 — **已落地**（feature `2026-05-18-dispatcher-trace-budget`） |
 | 4.6 | Config schema | D 写 → 所有读 | Phase 3 — **已落地**（feature `2026-05-17-config-yaml`） |
@@ -288,5 +303,6 @@ Feishu Base 作为索引层（**非** source of truth）。
 10. **`ROOSTERY_REAL_LARK_CLI` env 持久化路径** = `~/.roostery/env` + shell rc marker block 幂等 append（`# >>> roostery >>>` / `# <<< roostery <<<`，conda/pyenv 风格）。由 feature `2026-05-18-roostery-init` 在 `roostery init` 装机末段写入；用户后续升级 / 切 lark-cli 路径时编辑 `~/.roostery/env` 即可，不必重跑 `roostery init`；marker block 让用户能定位 / unpatch（Roostery 不实装 uninstall）。仅支持 zsh / bash（fish / nushell `UnsupportedShell` 拒绝）
 11. **`BUDGET_SCHEMA_VERSION = 1` 公开承诺**：自 feature `2026-05-18-dispatcher-trace-budget` 落地起，`~/.roostery/state/budget.json` schema 字段名 / 类型 / 序列化形态变更需 bump version + `cs-roadmap update` 评估 + 旧版兼容反序列化。同 `JournalEntry.schema_version` 模型；目前仅 default 单 bucket，per-runner / per-rule / by-rule 等粒度扩展会触发 schema bump
 12. **`TraceContext` max_depth caller 注入**：trace 模块不读 `Config`，`Config.trace.max_depth` 由 caller（Phase 4 dispatcher-loop）在 `TraceContext::new_root(parent_event_id, max_depth)` 调用点显式传入。**理由**：trace 模块是无状态 gate，不承担读 config 的副作用；caller 自决何时刷新 max_depth（restart vs hot reload）
+13. **Runner 子进程 env 必经 `SAFE_ENV_FORWARD` allowlist**（自 feature `2026-05-18-dispatcher-runners` 落地起）：父 hook 状态（如 `ROOSTERY_AGENT` / `ROOSTERY_REAL_LARK_CLI` / 任意 `ROOSTERY_*` 调用方 state）**不串到子 agent**——避 trace 链断裂、避用户 env 噪声透传到 LLM 服务、避隐式依赖。新增允许的 env 必须改 `runners::SAFE_ENV_FORWARD` const（grep-able 单点定义）+ 改 design doc 说明理由。trace ctx 三 env（`ROOSTERY_TRACE_ID` / `_DEPTH` / `_PARENT_EVENT_ID`）单独经 `trace::to_env_pairs()` 注入，**优先级覆盖**任何 collide 的父 env
 13. **`HOOK_EVENT_SCHEMA_VERSION = 1` + `RULES_SCHEMA_VERSION = 1` 双公开承诺**：自 feature `2026-05-18-dispatcher-rules` 落地起，`HookEvent` schema 字段名 / 类型 + `~/.roostery/rules.yaml` schema 变更需 bump version + `cs-roadmap update` + 旧版兼容反序列化。同 `JournalEntry` / `Config` / `BudgetState` 模型
 14. **dispatcher self-event 防自激约定**：`HookEvent.hook_source` 以 `dispatcher.` / `roostery.` 开头的事件被 `rules::matches` 短路返 `None`——这是 dispatcher 自己产生的事件不应再触发新规则评估的硬约束（防自激死循环）。`SELF_EVENT_PREFIXES` const 在 `rules.rs:33`；dispatcher-loop 上层 caller 命名自身 emit event 时**必须**用 `dispatcher.` / `roostery.` 前缀

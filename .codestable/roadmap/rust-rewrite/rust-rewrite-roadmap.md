@@ -447,12 +447,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
     - 主要支持的 req：`runtime-neutral`
     - 备注：Phase 4 第 2 子 feature；**rule schema 全新设计**（拒绝 Python parity）；HookEvent §4.4 schema 同步落地；3 维 AND MVP（hook_source eq + workspace_glob fnmatch 经 globset + trigger_meta 点路径 eq）；Action opaque `{runner, args: Value}` 透传；无模板引擎；first-match-wins；self-event 防自激（`dispatcher.` / `roostery.` 前缀短路）；本期不交付 dispatch 编排（dispatcher-loop feature）
 
-13. **`dispatcher-runners`** — `Runner` trait（§4.3）+ `cc_headless` / `codex_exec` / `gemini_headless` / `noop` 默认实现 + `runner_registry`
+13. **`dispatcher-runners`** — `Runner` trait（§4.3）+ `cc_headless` / `codex_exec` / `gemini_headless` / `noop` 默认实现 + `runner_registry` — **done**（feature `2026-05-18-dispatcher-runners`）
     - 所属模块：E
     - 依赖：`dispatcher-trace-budget`、`lark-cli-wrapper`
-    - 状态：planned
+    - 状态：**done**（feature `2026-05-18-dispatcher-runners`）
     - 主要支持的 req：**`runtime-neutral`**（这是中立接入的执行点）
-    - 备注：Phase 4；首发实现 `cc_headless` 即可工作；其他 runner 实现可为 stub，跟 runtime-neutral req 边界"首发不保证所有 runtime 同等支持"一致
+    - 备注：Phase 4 第 3 子 feature；首发实际落地 = `noop` + `cc_headless`（`codex_exec` / `gemini_headless` 完全不出现，推后到真有需求时新增 feature 加 impl，与 runtime-neutral req 边界"首发不保证所有 runtime 同等支持"一致）。**与 §4.3 偏离两项**（user 拍板）：(a) `Runner::run` 不收 `&BudgetGate` 参数（budget gate 编排留给 dispatcher-loop）；(b) `RunOutcome` 加 `cost_usd: Option<f64>` 字段。建议后续 `cs-roadmap update` 把 §4.3 原契约改齐。Runner trait async + 内部 `tokio::task::spawn_blocking` 包同步 `std::process::Command`（不引 `tokio::process` 避 ETXTBSY race）；env sanitize 经 `SAFE_ENV_FORWARD` const allowlist；CC JSON 解析容错——失败仍返 Success cost None
 
 14. **`dispatcher-loop`** — Loop + Event bridge + `roostery dispatcher` 子命令（fire / replay / test-rule）
     - 所属模块：E
