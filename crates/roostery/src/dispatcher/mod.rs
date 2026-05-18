@@ -163,11 +163,13 @@ async fn process_one(
     journal: &Journal,
     queue: &mut VecDeque<(HookEvent, TraceContext)>,
 ) -> DispatchStep {
-    let event_id = crate::journal::new_event_id();
-    let hook_source = event.hook_source.clone();
-    let depth = ctx.depth;
-    let mut entry = JournalEntry::new("dispatcher", hook_source.clone());
-    entry.event_id = event_id.clone();
+    let base = StepBase {
+        event_id: crate::journal::new_event_id(),
+        hook_source: event.hook_source.clone(),
+        depth: ctx.depth,
+    };
+    let mut entry = JournalEntry::new("dispatcher", base.hook_source.clone());
+    entry.event_id = base.event_id.clone();
     ctx.stamp_journal(&mut entry);
     entry.params = serde_json::json!({
         "session_id": event.session_id,
@@ -177,19 +179,14 @@ async fn process_one(
 
     // Gate 1: trace.check_depth
     if let Err(e) = ctx.check_depth() {
-        return finalize_step(
+        return reject(
             journal,
             entry,
-            DispatchStep {
-                event_id,
-                hook_source,
-                depth,
-                matched_rule: None,
-                runner_kind: None,
-                status: StepStatus::GateRejected {
-                    reason: e.to_string(),
-                },
-                fanout: 0,
+            &base,
+            None,
+            None,
+            StepStatus::GateRejected {
+                reason: e.to_string(),
             },
         );
     }
@@ -197,45 +194,26 @@ async fn process_one(
     // rules.matches（NoMatch 也写 journal）
     let m = match rules::matches(rules, &event) {
         Some(m) => m,
-        None => {
-            return finalize_step(
-                journal,
-                entry,
-                DispatchStep {
-                    event_id,
-                    hook_source,
-                    depth,
-                    matched_rule: None,
-                    runner_kind: None,
-                    status: StepStatus::NoMatch,
-                    fanout: 0,
-                },
-            );
-        }
+        None => return reject(journal, entry, &base, None, None, StepStatus::NoMatch),
     };
     let matched_rule_name = m.rule_name.as_str().to_string();
     let runner_kind = m.runner.to_string();
 
     // Gate 2: budget.check_or_raise(0.0) — 守"是否已超额"
+    // 其他 BudgetError 变体（LoadFailed / SaveFailed / ParseFailed /
+    // SchemaVersionMismatch）不会从 check_or_raise 出来——只有 Exceeded。
     if let Err(BudgetError::Exceeded { reason, .. }) = budget_state.check_or_raise(0.0) {
-        return finalize_step(
+        return reject(
             journal,
             entry,
-            DispatchStep {
-                event_id,
-                hook_source,
-                depth,
-                matched_rule: Some(matched_rule_name),
-                runner_kind: Some(runner_kind),
-                status: StepStatus::GateRejected {
-                    reason: format!("budget: {reason}"),
-                },
-                fanout: 0,
+            &base,
+            Some(matched_rule_name),
+            Some(runner_kind),
+            StepStatus::GateRejected {
+                reason: format!("budget: {reason}"),
             },
         );
     }
-    // 其他 BudgetError 变体（LoadFailed / SaveFailed / ParseFailed /
-    // SchemaVersionMismatch）不会从 check_or_raise 出来——只有 Exceeded。
 
     // Gate 3: runaway.record + check
     runaway.record(&ctx.trace_id);
@@ -246,21 +224,16 @@ async fn process_one(
         ..
     }) = runaway.check(&ctx.trace_id)
     {
-        return finalize_step(
+        return reject(
             journal,
             entry,
-            DispatchStep {
-                event_id,
-                hook_source,
-                depth,
-                matched_rule: Some(matched_rule_name),
-                runner_kind: Some(runner_kind),
-                status: StepStatus::GateRejected {
-                    reason: format!(
-                        "runaway: {count} fires in {window_secs}s (threshold {threshold})"
-                    ),
-                },
-                fanout: 0,
+            &base,
+            Some(matched_rule_name),
+            Some(runner_kind),
+            StepStatus::GateRejected {
+                reason: format!(
+                    "runaway: {count} fires in {window_secs}s (threshold {threshold})"
+                ),
             },
         );
     }
@@ -269,19 +242,14 @@ async fn process_one(
     let runner = match registry.find(&runner_kind) {
         Some(r) => r,
         None => {
-            return finalize_step(
+            return reject(
                 journal,
                 entry,
-                DispatchStep {
-                    event_id,
-                    hook_source,
-                    depth,
-                    matched_rule: Some(matched_rule_name),
-                    runner_kind: Some(runner_kind.clone()),
-                    status: StepStatus::Skipped {
-                        reason: format!("unknown runner kind: {runner_kind}"),
-                    },
-                    fanout: 0,
+                &base,
+                Some(matched_rule_name),
+                Some(runner_kind.clone()),
+                StepStatus::Skipped {
+                    reason: format!("unknown runner kind: {runner_kind}"),
                 },
             );
         }
@@ -289,23 +257,17 @@ async fn process_one(
 
     // runner.run（async）
     let args = m.args.clone();
-    let run_result = runner.run(&event, &ctx, &args).await;
-    let outcome: RunOutcome = match run_result {
+    let outcome: RunOutcome = match runner.run(&event, &ctx, &args).await {
         Ok(o) => o,
         Err(e) => {
-            return finalize_step(
+            return reject(
                 journal,
                 entry,
-                DispatchStep {
-                    event_id,
-                    hook_source,
-                    depth,
-                    matched_rule: Some(matched_rule_name),
-                    runner_kind: Some(runner_kind),
-                    status: StepStatus::Failed {
-                        reason: format!("RunnerError: {e}"),
-                    },
-                    fanout: 0,
+                &base,
+                Some(matched_rule_name),
+                Some(runner_kind),
+                StepStatus::Failed {
+                    reason: format!("RunnerError: {e}"),
                 },
             );
         }
@@ -324,7 +286,7 @@ async fn process_one(
             let _ = budget::save(budget_state);
 
             // 链式分发 emitted_events（S4 实现：受 DEFAULT_MAX_FANOUT 截断 + ctx.child）
-            let fanout = enqueue_emitted(queue, &ctx, &event_id, outcome.emitted_events);
+            let fanout = enqueue_emitted(queue, &ctx, &base.event_id, outcome.emitted_events);
             (StepStatus::Success, fanout)
         }
         RunnerStatus::Failed { reason } => (
@@ -345,13 +307,47 @@ async fn process_one(
         journal,
         entry,
         DispatchStep {
-            event_id,
-            hook_source,
-            depth,
+            event_id: base.event_id,
+            hook_source: base.hook_source,
+            depth: base.depth,
             matched_rule: Some(matched_rule_name),
             runner_kind: Some(runner_kind),
             status,
             fanout,
+        },
+    )
+}
+
+/// `process_one` 内每个 gate 拒绝路径共享的 step 头部字段。打包传递避免在
+/// 5 处 rejection 调用站点各 clone 一遍。
+struct StepBase {
+    event_id: String,
+    hook_source: String,
+    depth: u32,
+}
+
+/// Gate-rejected / NoMatch / Skipped / Failed 共用的 step 构造 + journal 收尾。
+/// `fanout` 恒为 0（这些路径不会链式分发 emitted_events）；成功路径走
+/// `finalize_step` 直调。
+fn reject(
+    journal: &Journal,
+    entry: JournalEntry,
+    base: &StepBase,
+    matched_rule: Option<String>,
+    runner_kind: Option<String>,
+    status: StepStatus,
+) -> DispatchStep {
+    finalize_step(
+        journal,
+        entry,
+        DispatchStep {
+            event_id: base.event_id.clone(),
+            hook_source: base.hook_source.clone(),
+            depth: base.depth,
+            matched_rule,
+            runner_kind,
+            status,
+            fanout: 0,
         },
     )
 }
