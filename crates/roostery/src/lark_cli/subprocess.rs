@@ -87,11 +87,27 @@ impl LarkRunner for LarkCli {
             }
         })?;
 
+        // codex audit round-3 finding：原实现 `let _ = write/shutdown` 静默吞
+        // 错让 caller 误以为 stdin 已送达；改为传播 StdinWriteFailed。
         if let Some(stdin_data) = opts.stdin
             && let Some(mut stdin) = child.stdin.take()
         {
-            let _ = stdin.write_all(stdin_data.as_bytes()).await;
-            let _ = stdin.shutdown().await;
+            let bytes = stdin_data.as_bytes();
+            if let Err(source) = stdin.write_all(bytes).await {
+                // 主动 reap child 防 zombie
+                let _ = child.kill().await;
+                return Err(LarkError::StdinWriteFailed {
+                    bytes_written: 0,
+                    source,
+                });
+            }
+            if let Err(source) = stdin.shutdown().await {
+                let _ = child.kill().await;
+                return Err(LarkError::StdinWriteFailed {
+                    bytes_written: bytes.len(),
+                    source,
+                });
+            }
         }
 
         let wait_fut = child.wait_with_output();

@@ -56,6 +56,9 @@ pub struct DispatchStep {
     pub status: StepStatus,
     /// 该 step 触发并被消费（入队）的 emitted_events 个数（受 DEFAULT_MAX_FANOUT 截断）。
     pub fanout: usize,
+    /// runner 返的 emitted_events 数 > DEFAULT_MAX_FANOUT 时为 true。兑现
+    /// ARCHITECTURE.md §6 第 16 条契约（codex audit round-3 finding）。
+    pub fanout_truncated: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -272,7 +275,7 @@ async fn process_one(
         }
     };
 
-    let (status, fanout) = match &outcome.status {
+    let (status, fanout, fanout_truncated) = match &outcome.status {
         RunnerStatus::Success => {
             // budget.consume + save
             if let Some(cost) = outcome.cost_usd {
@@ -287,20 +290,23 @@ async fn process_one(
             }
 
             // 链式分发 emitted_events（S4 实现：受 DEFAULT_MAX_FANOUT 截断 + ctx.child）
-            let fanout = enqueue_emitted(queue, &ctx, &base.event_id, outcome.emitted_events);
-            (StepStatus::Success, fanout)
+            let (fanout, truncated) =
+                enqueue_emitted(queue, &ctx, &base.event_id, outcome.emitted_events);
+            (StepStatus::Success, fanout, truncated)
         }
         RunnerStatus::Failed { reason } => (
             StepStatus::Failed {
                 reason: reason.clone(),
             },
             0,
+            false,
         ),
         RunnerStatus::Skipped { reason } => (
             StepStatus::Skipped {
                 reason: reason.clone(),
             },
             0,
+            false,
         ),
     };
 
@@ -315,6 +321,7 @@ async fn process_one(
             runner_kind: Some(runner_kind),
             status,
             fanout,
+            fanout_truncated,
         },
     )
 }
@@ -328,7 +335,8 @@ struct StepBase {
 }
 
 /// Gate-rejected / NoMatch / Skipped / Failed 共用的 step 构造 + journal 收尾。
-/// `fanout` 恒为 0（这些路径不会链式分发 emitted_events）；成功路径走
+/// `fanout` / `fanout_truncated` 恒为 0/false（这些路径不会链式分发 emitted_events）；
+/// 成功路径走
 /// `finalize_step` 直调。
 fn reject(
     journal: &Journal,
@@ -349,6 +357,7 @@ fn reject(
             runner_kind,
             status,
             fanout: 0,
+            fanout_truncated: false,
         },
     )
 }
@@ -363,6 +372,7 @@ fn finalize_step(journal: &Journal, mut entry: JournalEntry, step: DispatchStep)
                 "matched_rule": step.matched_rule,
                 "runner_kind": step.runner_kind,
                 "fanout": step.fanout,
+                "fanout_truncated": step.fanout_truncated,
             }),
         },
         StepStatus::NoMatch => JournalResult::Ok {
@@ -386,19 +396,20 @@ fn finalize_step(journal: &Journal, mut entry: JournalEntry, step: DispatchStep)
 }
 
 /// 把 runner 返的 emitted_events 入队走链式分发；超 DEFAULT_MAX_FANOUT 截断。
-/// 返实际入队个数。
+/// 返 `(实际入队个数, 是否截断)`。`truncated=true` 反向追踪 runner bug / 链式风暴。
 fn enqueue_emitted(
     queue: &mut VecDeque<(HookEvent, TraceContext)>,
     parent_ctx: &TraceContext,
     parent_event_id: &str,
     emitted: Vec<HookEvent>,
-) -> usize {
-    let take = emitted.len().min(DEFAULT_MAX_FANOUT);
+) -> (usize, bool) {
+    let total = emitted.len();
+    let take = total.min(DEFAULT_MAX_FANOUT);
     for child_event in emitted.into_iter().take(take) {
         let child_ctx = parent_ctx.child(Some(parent_event_id.to_string()));
         queue.push_back((child_event, child_ctx));
     }
-    take
+    (take, total > DEFAULT_MAX_FANOUT)
 }
 
 /// 加载或初始化 BudgetState。
@@ -911,6 +922,12 @@ mod tests {
         // 1 root + 16 children = 17
         assert_eq!(outcome.dispatched.len(), 17);
         assert_eq!(outcome.dispatched[0].fanout, DEFAULT_MAX_FANOUT);
+        assert!(
+            outcome.dispatched[0].fanout_truncated,
+            "30 > DEFAULT_MAX_FANOUT 应标 truncated"
+        );
+        // 子 step 未截断
+        assert!(!outcome.dispatched[1].fanout_truncated);
         restore_home();
     }
 

@@ -455,6 +455,11 @@ fn spawn_with_timeout(
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // codex audit round-3 [2] partial 修复：timeout / err 路径也
+                    // join reader thread，避免 dangling JoinHandle（child.kill()
+                    // 后管道关闭，reader 自然 EOF 退出，join 立刻完成）。
+                    let _ = stdout_join.join();
+                    let _ = stderr_join.join();
                     return Err(RunnerError::Timeout {
                         kind: "cc_headless",
                         timeout_ms,
@@ -463,6 +468,10 @@ fn spawn_with_timeout(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(source) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_join.join();
+                let _ = stderr_join.join();
                 return Err(RunnerError::SpawnFailed {
                     kind: "cc_headless",
                     source,

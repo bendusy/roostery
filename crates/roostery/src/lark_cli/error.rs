@@ -44,6 +44,16 @@ pub enum LarkError {
     /// 超 `RunOptions.timeout` 或 `LarkCli` 默认 30s。
     #[error("lark-cli timed out after {timeout_ms}ms")]
     Timeout { timeout_ms: u64 },
+
+    /// `RunOptions.stdin` 写入或 shutdown 失败 —— caller 提供的 stdin 数据
+    /// 未真正交付给 lark-cli。**codex audit round-3** finding：原实现
+    /// `let _ = write/shutdown` 静默吞错让 caller 误以为 stdin 已送达。
+    #[error("failed to write {bytes_written} bytes to lark-cli stdin: {source}")]
+    StdinWriteFailed {
+        bytes_written: usize,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl LarkError {
@@ -68,6 +78,7 @@ impl LarkError {
             Self::NonZeroExit { .. } => "NonZeroExit",
             Self::OutputParse { .. } => "OutputParse",
             Self::Timeout { .. } => "Timeout",
+            Self::StdinWriteFailed { .. } => "StdinWriteFailed",
         }
     }
 }
@@ -206,6 +217,7 @@ mod tests {
             LarkError::NonZeroExit { .. } => "exit",
             LarkError::OutputParse { .. } => "parse",
             LarkError::Timeout { .. } => "timeout",
+            LarkError::StdinWriteFailed { .. } => "stdin_write",
         };
         assert_eq!(label, "timeout");
     }
