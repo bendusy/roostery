@@ -4,8 +4,8 @@ category: convention
 slug: rust-module-organization
 status: active
 created: 2026-05-16
-updated: 2026-05-17
-tags: [rust, module-layout, codebase-structure, cargo-bin-target]
+updated: 2026-05-18
+tags: [rust, module-layout, codebase-structure, cargo-bin-target, resource-templates]
 ---
 
 # Rust 模块组织约定
@@ -60,6 +60,32 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 - 一个档 4 的 bin 预估超 500 行或内部模块化需求显著 → 升级到 `src/bin/{name}/main.rs` + 子模块（仍同 crate；Cargo 自动识别）
 - 当 bin 不需要 lib 的 transitive deps（如 shim 不用 tokio 但同 crate 已传递引入 tokio）且**二进制 size 敏感**——若 release LTO 后实测 > 5 MB → 升档 3 独立 workspace crate
 
+### 档 5：资源文件子目录（自 hooks-merge 起补档）
+
+`crates/{crate}/src/templates/`（或同级其他名如 `assets/` / `fixtures/`）放纯文本资源文件（`.json` / `.sh` / `.yaml` / `.md` / `.html` 等非 Rust 源码），由 `include_str!` / `include_bytes!` 编译期嵌入到对应 lib 模块。
+
+适用：
+
+- 模板 / 嵌入资源（CC / Codex hook fragment JSON、stop bridge sh、未来 stop-hook 替代脚本等）
+- 编译期已知 / 不在运行时去 disk 找的纯文本资源（"单二进制 self-contained" 承诺的载体）
+- 任何"需要随二进制走但属于数据而非代码"的内容
+
+例：`crates/roostery/src/templates/`（feature `2026-05-18-hooks-merge`，3 文件 `cc_stop_hook.json` / `codex_stop_hook.json` / `agent_stop_notify.sh`）。
+
+**规则**：
+
+- 子目录内文件**不是 Rust 源码**——不写 `pub mod`，不进 mod 树，文件名走资源本身扩展名（`.json` / `.sh` 等）
+- 每个资源文件对应消费它的 lib 模块顶层 `pub const NAME: &str = include_str!("templates/file.ext");` 暴露（路径相对调用文件，即 `src/{module}.rs` 同级 `src/templates/`）
+- 占位符替换默认用 `String::replace`（朴素直白）；只有真出现"多变量动态结构"才升级到 `tinytemplate` / `handlebars-rust` 等模板引擎——单变量场景引模板引擎是 over-engineering
+- 修改资源文件**必须有 golden file 对比测试**（roadmap §4.7 "byte-for-byte 一致除非文档另有规定"约束兑现路径）
+- 子目录名按内容性质命名（`templates/` / `assets/` / `fixtures/`），同一 crate 多类资源时各起一个不要堆 `resources/` 一筐
+
+**与档 1-4 的关系**：
+
+- 档 1-4 都是 Rust **源码**组织约定（lib 模块 / 子目录 / 独立 crate / Cargo bin target）
+- 档 5 是**资源文件**子目录——不进 mod 树，与档 1-4 正交存在
+- 一个模块可以同时落在档 1（单文件 lib）+ 档 5（同目录引用 templates/）—— hooks_merge.rs 就是这个组合
+
 ### 命名
 
 - 文件名 / 模块名 `snake_case`
@@ -92,6 +118,9 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 | **档 4 辅助 bin 直接独立 crate**（2026-05-17 评估）| 增加 workspace member 配置成本 + 失去同 crate lib 模块零成本复用；只在 size-sensitive 且实测超阈值时才值得，作为档 4 升档触发而非默认选择 |
 | **档 4 不用 `src/bin/` 而用 subcommand 嵌进 `src/main.rs`**（2026-05-17 评估）| user-facing CLI 和辅助工具混在同一二进制；shim 装机点是 `~/.local/bin/lark-cli`（独立路径），与 `roostery init` 等 user-facing 命令本质不同——subcommand 形式无法满足 PATH-prefix 透传场景 |
 | **档 4 不显式声明 `[[bin]]` 段，只靠 Cargo 文件名自动发现**（2026-05-17 评估）| Cargo 确实能自动发现 `src/bin/*.rs`，但显式段把"二进制名"钉成稳定契约（agent runtime 装机脚本依赖名字稳定），避免未来重命名 `src/bin/shim.rs` 时静默改变 bin 名 |
+| **档 5 资源文件放 `src/` 同级而非子目录**（2026-05-18 评估）| 3+ 资源文件平铺到 `src/` 顶层会污染源码 navigation；子目录把 "非 Rust 源码 + 编译期嵌入" 这一类隔离开，文件树读者立刻看出"这块是资源不是模块" |
+| **档 5 用 build.rs 生成嵌入而非 `include_str!`**（2026-05-18 评估）| `include_str!` 编译期内联简单可预测，build.rs 引入额外构建步骤 + 输出路径管理 + IDE 友好度下降；本项目资源文件数量级（10 以内）不需要 build.rs 优化 |
+| **档 5 引模板引擎管所有资源**（2026-05-18 评估）| hook fragment 只 1 个占位符 `{{HOOK_SCRIPT}}`，模板引擎 800 KB+ 二进制成本 + 学习成本不抵收益；保留"出现多变量动态结构再升级" 的渐进路径 |
 
 ## 影响 / 后续约束
 
@@ -103,10 +132,12 @@ journal-core 落地后 `src/` 已 5 文件（`main.rs` / `lib.rs` / `redact.rs` 
 - **审视周期**：
   - Phase 2（lark-cli-wrapper / smoke / shim）落地后回看一次——届时 src/ 会有 ~8 文件，验证档位阈值是否仍合理；不合理走本 decision 的 `update` 流程（不 supersede，结论本身没变）
   - **2026-05-17 update**：Phase 2 收尾审视——三档（档 1/2/3）阈值经 redact / journal / lark_cli 验证合理；新增第 4 档（Cargo bin target）覆盖 shim 路径。下次审视点 Phase 5（bot bridge feature 落地后，预计触发新的辅助 bin 如 stop-hook 脚本嵌入）
+  - **2026-05-18 update**：Phase 3 hooks-merge 落地——新增第 5 档（资源文件子目录）覆盖 `crates/roostery/src/templates/` 3 文件（cc_stop_hook.json / codex_stop_hook.json / agent_stop_notify.sh）`include_str!` 嵌入模式。档 1-4 都管 Rust 源码组织，档 5 管"非 Rust 源码 + 编译期嵌入"，与档 1-4 正交。下次审视点同上（Phase 5）
 
 ## 相关文档
 
 - `.codestable/features/2026-05-15-core-redact/core-redact-design.md` §2.5：首次 flag 本约定的需要
 - `.codestable/features/2026-05-15-journal-core/journal-core-design.md` §2.5：第二次 flag，触发本归档
 - `.codestable/features/2026-05-17-lark-cli-shim/lark-cli-shim-design.md` §2.5：识别出档 4 Cargo bin target，跑通后由 acceptance 阶段触发本 decision update（2026-05-17）
+- `.codestable/features/2026-05-18-hooks-merge/hooks-merge-design.md` §2.5：识别出档 5 资源文件子目录，跑通后由 acceptance 阶段触发本 decision update（2026-05-18）
 - `.codestable/architecture/ARCHITECTURE.md` §3 Module A-H：roadmap-level module 划分（注意：与本 Rust 文件 / 目录约定是**不同维度**——roadmap module 是规划聚合，本约定是 Rust 物理结构）
