@@ -531,11 +531,16 @@ pub fn format_report(report: &InitReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// 串行化所有触碰 `$SHELL` 的测试——attention.md 规约"测试中并发触碰 env
+    /// 必须用 static Mutex 串行化"。否则 cargo test 默认 multi-thread 跑会让
+    /// 这 4 个 `shell_kind_detect_*` 测试互相覆盖 env，CI 偶发 fail。
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn shell_kind_detect_zsh() {
-        // SAFETY: identity test, but it touches $SHELL — serialize at the test level.
-        // For unit-scope we accept the race since no other test in this file sets $SHELL.
+        let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::set_var("SHELL", "/bin/zsh") };
         assert_eq!(ShellKind::detect_from_env().unwrap(), ShellKind::Zsh);
@@ -549,6 +554,7 @@ mod tests {
 
     #[test]
     fn shell_kind_detect_bash() {
+        let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::set_var("SHELL", "/usr/local/bin/bash") };
         assert_eq!(ShellKind::detect_from_env().unwrap(), ShellKind::Bash);
@@ -562,6 +568,7 @@ mod tests {
 
     #[test]
     fn shell_kind_detect_fish_errors() {
+        let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::set_var("SHELL", "/usr/bin/fish") };
         match ShellKind::detect_from_env() {
@@ -580,6 +587,7 @@ mod tests {
 
     #[test]
     fn shell_kind_detect_unset_errors() {
+        let _g = ENV_LOCK.lock().unwrap();
         let prev = std::env::var("SHELL").ok();
         unsafe { std::env::remove_var("SHELL") };
         match ShellKind::detect_from_env() {
