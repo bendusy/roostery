@@ -4,7 +4,7 @@ slug: runtime-neutral
 pitch: 不被某家 agent runtime 绑死——CC / Codex / Gemini / 自己写的，都能在同一套飞书面里出活。
 status: draft
 last_reviewed: 2026-05-15
-implemented_by: []
+implemented_by: [2026-05-18-dispatcher-trace-budget]
 tags: [vendor-neutral, agent-runtime, interoperability]
 ---
 
@@ -43,3 +43,8 @@ agent runtime 生态正在裂变。Claude Code、Codex、Gemini、OpenClaw、Cur
 - **不替用户选 runtime**——不做 "auto-select best runtime for this task" 这种判断，选哪家由用户自己决定
 - **不接管 runtime 的配置和密钥**——每家 runtime 各自的 API key / 模型选择 / 参数仍归用户管，Roostery 不做集中身份层
 - **加新 runtime 不是零开发自动支持**——接入新 runtime 需要写一份 adapter，这是开发者侧的工作。用户感知层是"这个 runtime 已经支持 / 还不支持"，而不是"任何 runtime 都自动支持"
+
+## 变更日志
+
+- 2026-05-15：drafted（初稿落档）
+- **2026-05-18**：`dispatcher-trace-budget` 落地（feature `2026-05-18-dispatcher-trace-budget`），Phase 4 Module E 起步。`TraceContext`（深度守门）+ `BudgetState`（配额守门）+ `RunawayTracker`（事后阈值兜底）三独立 gate 模块就位。**这是 req 的"loop 保护是中立 dispatcher 的前提"基础设施层**：三 gate 不感知具体哪家 runtime，是后续 Phase 4 dispatcher-loop 接入任意 runtime 时必经的守门基底。req 仍保持 `draft`——用户视角"换 runtime 飞书侧呈现不变"要 Phase 4 收尾 dispatcher-loop + Phase 5 bot-stop-hook 全套兑现

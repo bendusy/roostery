@@ -433,12 +433,12 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 
 ### Module E · Dispatcher
 
-11. **`dispatcher-trace-budget`** — Trace（§4.5）+ Budget gate 模块；持久化 `~/.roostery/state/budget.json`
+11. **`dispatcher-trace-budget`** — Trace（§4.5）+ Budget gate 模块；持久化 `~/.roostery/state/budget.json` — **done**（feature `2026-05-18-dispatcher-trace-budget`）
     - 所属模块：E
     - 依赖：`rust-scaffold`、`journal-core`、`config-yaml`
-    - 状态：planned
+    - 状态：**done**（feature `2026-05-18-dispatcher-trace-budget`）
     - 主要支持的 req：**`runtime-neutral`**（loop 保护是中立 dispatcher 的前提）
-    - 备注：Phase 4
+    - 备注：Phase 4 起步 feature；3 独立 gate 模块 `trace` / `budget` / `runaway`（互不引用，dispatcher-loop 上层 caller 串场景）；`TraceContext`（depth+max_depth 守门，env 跨 process 传播）+ `BudgetState`（roadmap §4.6 default 单 bucket + f64 USD + 跨日 rollover + atomic 持久化）+ `RunawayTracker`（事后兜底，window/threshold 内存滑动窗口）；Cargo.toml 0 新增依赖；`TraceId` newtype 与 `business-identifier-newtype` decision 一致；本 feature 完成 = caller 装弹就绪，dispatcher 还不会跑（等 dispatcher-loop 收尾 feature）
 
 12. **`dispatcher-rules`** — Rules 模块 + YAML 规则反序列化 + 匹配逻辑
     - 所属模块：E

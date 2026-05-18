@@ -85,7 +85,7 @@ items:
   - slug: dispatcher-trace-budget
     description: Trace（§4.5）+ Budget gate 模块；持久化 ~/.roostery/state/budget.json
     depends_on: [rust-scaffold, journal-core, config-yaml]
-    status: in-progress
+    status: done
     feature: 2026-05-18-dispatcher-trace-budget
     minimal_loop: false
     notes: "Phase 4；loop 保护是中立 dispatcher 的前提"

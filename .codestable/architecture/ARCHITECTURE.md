@@ -53,6 +53,11 @@
 | `AgentKind::Gemini` | `hooks_merge.rs:43` `AgentKind` enum 第 3 变体（hooks-merge 起 cc/codex 二项 + roostery-init 顺手加 gemini）。对应模板 `GEMINI_STOP_HOOK_JSON` `include_str!` 编译期嵌入 `templates/gemini_stop_hook.json`；Gemini CLI 走 `~/.gemini/settings.json` SessionEnd event |
 | `ShellKind` | `onboarding.rs:98`（feature `2026-05-18-roostery-init`）。`#[non_exhaustive]` enum { Zsh, Bash }——其他 shell（fish / nushell）目前不支持。`detect_from_env()` 走 `$SHELL` ends-with 检测；`rc_path()` 返 `~/.zshrc` / `~/.bashrc` |
 | `roostery init` 子命令 | `crates/roostery/src/main.rs Command::Init(InitArgs)`（feature `2026-05-18-roostery-init`）。`--dry-run` + `--skip-agent <AGENT>`（可重复）；handler 起 tokio current_thread runtime block_on `onboarding::run`。装机流水线 9 阶段线性：smoke gate → mkdir state → identity reflect → agent_detect → install_shim（current_exe sibling + sha2 hash 比对幂等）→ write_sh_bridge → merge_hooks per installed agent → write `~/.roostery/env`（含 `export ROOSTERY_REAL_LARK_CLI=<resolved>`）→ patch_shell_rc（marker block `# >>> roostery >>>` / `# <<< roostery <<<` 幂等）→ format_report |
+| `TraceContext` | Phase 4 落地的 `crates/roostery/src/trace.rs`（feature `2026-05-18-dispatcher-trace-budget`）。`#[non_exhaustive]` 4 字段（`trace_id: TraceId` / `parent_event_id: Option<String>` / `depth: u32` / `max_depth: u32`，**depth 从 0 起步**——与 Python 1-based parity 偏离，按 roadmap §4.5 docs-authority）；`new_root` 起 fresh trace_id + depth=0，`child(parent_event_id)` 返新值 depth+1（不可变），`check_depth` `>= max_depth` 返 `TraceError::DepthExceeded`，`to_env_pairs` / `from_env` 用 `ROOSTERY_TRACE_ID` / `ROOSTERY_DEPTH` / `ROOSTERY_PARENT_EVENT_ID` env 跨 process 传递，`stamp_journal(&mut entry)` 写 trace 三字段到 JournalEntry 不动其他字段 |
+| `TraceId` | `trace.rs:36` `(String)` `#[serde(transparent)]` newtype（16-byte hex via getrandom，32 hex chars 编码）。`PartialOrd / Ord / Hash` derive 让 `BTreeMap<TraceId, _>` 索引可行。与 `business-identifier-newtype` decision §6 一致——禁用直接 String 互转，编译期防 cross-wiring 与 event_id / parent_event_id 等其他 id 类字符串 |
+| `BudgetState` / `Bucket` | `crates/roostery/src/budget.rs`（feature `2026-05-18-dispatcher-trace-budget`）。`BudgetState` `#[non_exhaustive]` 3 字段（`schema_version: u32` const 1 / `day: NaiveDate` / `default: Bucket`，仅 default 单 bucket——roadmap §4.6 当前形状；per-runner / per-rule 等粒度走未来 `cs-roadmap update`）；`Bucket { calls, cost_usd, max_calls, max_cost_usd }` 全 f64 USD（**不沿用 Python i64 cents**）；线性流水 `from_cfg → roll_over_if_needed → check_or_raise → consume → save`；`roll_over_if_needed` 跨日 reset 触发，每次 `check_or_raise` / `consume` 前内部调一次让 tail-running daemons 过午夜也正确；持久化 `~/.roostery/state/budget.json` atomic `.tmp` + rename + 缺父目录自建 + JSON pretty + `\n` trailing；`BudgetError` `#[non_exhaustive]` 5 变体（LoadFailed / ParseFailed / SaveFailed / Exceeded / SchemaVersionMismatch） |
+| `BUDGET_SCHEMA_VERSION` | `budget.rs:25` 公开 const `= 1`。**公开承诺**：bump 需 `cs-roadmap update` + 旧版兼容反序列化（同 journal `JournalEntry.schema_version` 模型） |
+| `RunawayTracker` | `crates/roostery/src/runaway.rs`（feature `2026-05-18-dispatcher-trace-budget`）。事后兜底防御层（trace `check_depth` 是事前防御，runaway 是事后阈值兜底）。`window: Duration` + `threshold: u32` + `fires: BTreeMap<TraceId, Vec<Instant>>` 内存 only；默认 window=300s threshold=10 const；`record` 懒清窗口外 + 返窗内 count；`check` `>= threshold` → `RunawayError::Detected`；`with_clock(...)` 注入伪 clock 测试；**进程内单实例**，跨进程 runaway 跟踪推后到真有需求时评估（roadmap §7 观察项） |
 
 ### State ownership
 
@@ -192,7 +197,20 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 
 ### Module E · Dispatcher（Phase 4）
 本地执行桥。event → 规则匹配 → trace/budget gate → runner → emit。`runtime-neutral` req 的执行机制（通过 `Runner` trait 调度，不感知具体 runtime）。
-- 子 feature：`dispatcher-trace-budget` / `dispatcher-rules` / `dispatcher-runners` / `dispatcher-loop`
+
+**trace / budget / runaway 模块**（已落地，feature `2026-05-18-dispatcher-trace-budget`，Phase 4 起步）：
+
+- 三独立 gate 模块，互不引用——上层 dispatcher-loop（Phase 4 收尾 feature）作为 caller 串场景把它们编排成 `trace.check_depth → runaway.record + check → budget.check_or_raise → 派发到 runner → budget.consume + save` 链路
+- 新文件 `crates/roostery/src/trace.rs`（产品 ~202 行 + 14 内联测）/ `src/budget.rs`（产品 ~330 行 + 14 内联测）/ `src/runaway.rs`（产品 ~160 行 + 8 内联测）；`paths.rs` 加 `budget_state_path()`；`lib.rs` 加 3 pub mod
+- 公开 API：
+  - `trace::{TraceContext, TraceId, TraceError, ENV_TRACE_ID, ENV_DEPTH, ENV_PARENT_EVENT_ID}`
+  - `budget::{BudgetState, Bucket, BudgetError, BUDGET_SCHEMA_VERSION, load, load_from, save, save_to}`
+  - `runaway::{RunawayTracker, RunawayError, DEFAULT_WINDOW_SECS, DEFAULT_THRESHOLD}`
+- 设计约束：**caller 注入 max_depth**（trace 模块不读 Config，由 dispatcher-loop 把 `Config.trace.max_depth` 传进 `TraceContext::new_root`）；**budget 默认 bucket only**（per-runner / per-rule 推后）；**runaway 内存 only**（跨进程跟踪推后）；**三模块不消费 LarkRunner**（无飞书 IO 责任，纯本地 gate）
+- 不变量：TraceContext 不可变（new_root/child 返新值；stamp_journal 仅借用 mut entry 字段）；depth 单调递增（child 总 +1，无 decrement API）；budget save atomic（.tmp + rename + 父目录自建）；budget rollover 幂等（同日多次调无副作用）；BUDGET_SCHEMA_VERSION=1 公开承诺；runaway tracker drop 即丢；runaway 窗口清理懒计算（record 时 retain）
+- Cargo.toml 0 新增依赖（trace 用 getrandom 既有；budget 用 serde_json + chrono 既有；runaway std-only）；测试用 atomic clock 不触碰 env，三模块设计上独立于 env 状态
+
+- 子 feature：**`dispatcher-trace-budget`（done）** / `dispatcher-rules` / `dispatcher-runners` / `dispatcher-loop`
 
 ### Module F · Bot Bridge（Phase 5）
 agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feishu` req 的直接兑现层**。`bot-stop-hook` feature 完成 = "Rust 可用" milestone = 0.1.0 触发判据。
@@ -219,7 +237,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 | 4.2 | `JournalEntry` schema | C/E/F 写 → 用户/社区读 | Phase 1 |
 | 4.3 | `Runner` trait | E → 具体 runner | Phase 4 |
 | 4.4 | `HookEvent` schema | D/E → E | Phase 3-4 |
-| 4.5 | `TraceContext` | E → F → C | Phase 4 |
+| 4.5 | `TraceContext` | E → F → C | Phase 4 — **已落地**（feature `2026-05-18-dispatcher-trace-budget`） |
 | 4.6 | Config schema | D 写 → 所有读 | Phase 3 — **已落地**（feature `2026-05-17-config-yaml`） |
 | 4.7 | 模板嵌入约定 | D → 用户文件系统 | Phase 3 — **已落地**（feature `2026-05-18-hooks-merge` 立首例 cc+codex 二模板；feature `2026-05-18-roostery-init` 顺手补 gemini 第 3 模板，3 个 `pub const` `include_str!` 编译期嵌入） |
 
@@ -252,3 +270,5 @@ Feishu Base 作为索引层（**非** source of truth）。
 8. **journal schema_version=1 公开承诺**：自 journal-core 落地起（commit `b9ac5be`），`JournalEntry` 字段名 / 类型 / 序列化形态变更需 bump version + 兼容旧版 deserialize + `cs-roadmap update` 评估 portable-by-default 影响。`Journal::append` 不内建脱敏，caller 自行用 `redact::scrub_value` 过 `params` 后填入
 9. **`ROOSTERY_AGENT` env 约定**：agent runtime 识别用 `ROOSTERY_AGENT=cc` / `=codex` / `=gemini`（Stop hook command 拼前缀），由 stop bridge sh 在 hook fire 时读取传给 `roostery dispatcher fire`；**不沿用** Python `FEISHU_HUB_AGENT`（feature `2026-05-18-hooks-merge` 一次切口径 cc/codex 立项，feature `2026-05-18-roostery-init` 加 gemini）
 10. **`ROOSTERY_REAL_LARK_CLI` env 持久化路径** = `~/.roostery/env` + shell rc marker block 幂等 append（`# >>> roostery >>>` / `# <<< roostery <<<`，conda/pyenv 风格）。由 feature `2026-05-18-roostery-init` 在 `roostery init` 装机末段写入；用户后续升级 / 切 lark-cli 路径时编辑 `~/.roostery/env` 即可，不必重跑 `roostery init`；marker block 让用户能定位 / unpatch（Roostery 不实装 uninstall）。仅支持 zsh / bash（fish / nushell `UnsupportedShell` 拒绝）
+11. **`BUDGET_SCHEMA_VERSION = 1` 公开承诺**：自 feature `2026-05-18-dispatcher-trace-budget` 落地起，`~/.roostery/state/budget.json` schema 字段名 / 类型 / 序列化形态变更需 bump version + `cs-roadmap update` 评估 + 旧版兼容反序列化。同 `JournalEntry.schema_version` 模型；目前仅 default 单 bucket，per-runner / per-rule / by-rule 等粒度扩展会触发 schema bump
+12. **`TraceContext` max_depth caller 注入**：trace 模块不读 `Config`，`Config.trace.max_depth` 由 caller（Phase 4 dispatcher-loop）在 `TraceContext::new_root(parent_event_id, max_depth)` 调用点显式传入。**理由**：trace 模块是无状态 gate，不承担读 config 的副作用；caller 自决何时刷新 max_depth（restart vs hot reload）
