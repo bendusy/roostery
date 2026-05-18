@@ -26,7 +26,6 @@ use self::runaway::{RunawayError, RunawayTracker};
 use self::runners::{RunOutcome, RunnerRegistry, RunnerStatus};
 use self::trace::{TraceContext, TraceId};
 use crate::config;
-use crate::config::BudgetCfg;
 use crate::journal::{Journal, JournalEntry, JournalResult};
 use std::collections::VecDeque;
 use thiserror::Error;
@@ -115,14 +114,29 @@ pub async fn fire(
         None => TraceContext::new_root(None, max_depth),
     };
 
-    // 准备外部状态：budget / runaway 跨 step 共享。
-    let mut budget_state = load_or_init_budget(&cfg.budgets.default);
+    // 准备外部状态。
+    //
+    // **codex audit round-4 P1 修复**：BudgetGuard 在 fire 期间持有 advisory
+    // flock，串行化跨进程 RMW。其他并发 hook 进程在 BudgetGuard::open() 阻塞，
+    // 防 max_calls / max_cost_usd 被绕过。fire 结束 commit 写回 + 释放锁。
+    //
+    // Guard open 失败（极端 disk error）→ 退化为本地 fresh state + log，保
+    // "agent hook 不被审计层 block" 的 0.1.x 设计意图；但失去跨进程 serial 保证。
+    let (mut budget_state_local, mut guard_opt) =
+        match budget::BudgetGuard::open(&cfg.budgets.default) {
+            Ok(g) => (None, Some(g)),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "budget guard open failed; falling back to in-memory fresh state — \
+                     cross-process serialization NOT enforced this fire"
+                );
+                (Some(BudgetState::from_cfg(&cfg.budgets.default)), None)
+            }
+        };
     let mut runaway = RunawayTracker::new();
-    // 用配置的 journal 目录（codex audit finding-08 修复）——`paths::journal_dir()`
-    // 是 default 值，但 cfg.journal.dir 才是配置的 source of truth。
     let journal = Journal::open(cfg.journal.dir.clone());
 
-    // BFS 队列：(event, ctx)。
     let mut queue: VecDeque<(HookEvent, TraceContext)> = VecDeque::new();
     queue.push_back((root_event, root_ctx.clone()));
 
@@ -130,12 +144,19 @@ pub async fn fire(
     let mut root_event_id: Option<String> = None;
 
     while let Some((event, ctx)) = queue.pop_front() {
+        let budget_state: &mut BudgetState = if let Some(g) = guard_opt.as_mut() {
+            g.state_mut()
+        } else {
+            budget_state_local
+                .as_mut()
+                .expect("guard or local must exist")
+        };
         let step = process_one(
             event,
             ctx,
             registry,
             rules,
-            &mut budget_state,
+            budget_state,
             &mut runaway,
             &journal,
             &mut queue,
@@ -145,6 +166,13 @@ pub async fn fire(
             root_event_id = Some(step.event_id.clone());
         }
         dispatched.push(step);
+    }
+
+    // commit budget state + 释放跨进程锁（仅有 guard 时）。
+    if let Some(g) = guard_opt
+        && let Err(e) = g.commit()
+    {
+        tracing::error!(error = %e, "budget guard commit failed; state may be stale");
     }
 
     DispatchOutcome {
@@ -285,9 +313,8 @@ async fn process_one(
             if outcome.cost_usd.is_none() {
                 budget_state.consume(0.0);
             }
-            if let Err(e) = budget::save(budget_state) {
-                tracing::error!(error = %e, "budget save failed; next invocation may see stale state");
-            }
+            // budget commit 由 fire() 收尾统一做（BudgetGuard.commit），保证跨进程
+            // RMW 原子；这里不在 process_one 内 save，否则失去 guard 锁定意义。
 
             // 链式分发 emitted_events（S4 实现：受 DEFAULT_MAX_FANOUT 截断 + ctx.child）
             let (fanout, truncated) =
@@ -412,35 +439,9 @@ fn enqueue_emitted(
     (take, total > DEFAULT_MAX_FANOUT)
 }
 
-/// 加载或初始化 BudgetState。
-///
-/// **codex audit finding-05**：原实现 `unwrap_or_else(|_| from_cfg)` 把所有错误
-/// （含文件损坏 / parse 失败 / schema mismatch）都当首次运行重置。这让 budget 文件
-/// 因 disk 错误或人为篡改损坏时，预算 gate 被静默旁路。修复后区分两类：
-/// - LoadFailed 且 `NotFound`：合法首次运行，无需 log
-/// - 其他所有错误：可疑（disk / parse / schema），tracing::error 大声 log 让 operator
-///   注意。仍 fallback 到 fresh state 避免阻塞主流程，但 operator 能从 log 看到
-///   "budget 被重置"信号，去查 `~/.roostery/state/budget.json` 状态。
-fn load_or_init_budget(cfg: &BudgetCfg) -> BudgetState {
-    match budget::load() {
-        Ok(state) => state,
-        Err(BudgetError::LoadFailed { source, .. })
-            if source.kind() == std::io::ErrorKind::NotFound =>
-        {
-            // 合法首次运行——budget.json 文件还未创建。
-            BudgetState::from_cfg(cfg)
-        }
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                "budget state load failed; falling back to fresh state from config — \
-                 investigate ~/.roostery/state/budget.json (disk error / parse error / \
-                 schema mismatch) before next run"
-            );
-            BudgetState::from_cfg(cfg)
-        }
-    }
-}
+// load_or_init_budget 被 BudgetGuard::open 取代（codex audit round-4 P1）。
+// 错误分类（NotFound 自动 from_cfg / 其他 log + caller 兜底）现在在 fire()
+// 的 BudgetGuard::open 处理路径里。
 
 /// replay 入口——读 journal 找 trace_id 根 entry → 重建 HookEvent → 调 fire；
 /// 分配新 trace_id（不沿用），journal 加 `replay_of: <source_trace_id>` 关联。

@@ -17,8 +17,8 @@ use crate::config::BudgetCfg;
 use crate::paths;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::io;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -208,6 +208,120 @@ fn today_utc() -> NaiveDate {
     chrono::Utc::now().date_naive()
 }
 
+// --- BudgetGuard: cross-process atomic RMW (codex round-4 P1) -------------
+//
+// **问题**：原 dispatcher::fire 走 `load() → 多次 mutate → save()`，两条
+// hook 进程并发时都读到旧 state、各自通过 gate、最后互覆 rename，导致
+// `max_calls` / `max_cost_usd` 被绕过。
+//
+// **修复**：引入 BudgetGuard，开 file 立刻 acquire exclusive flock，整个
+// fire() 期间持锁，commit / drop 时释放。其他 fire 进程在 lock_exclusive()
+// 阻塞，串行化跨进程 RMW。锁基于 advisory `flock(2)`（Rust 1.89+ stdlib），
+// drop 自动释放。
+//
+// **死锁**：单 fire 内只 acquire 一把锁，无嵌套；超时未集成（hook 本身有
+// timeout 守 agent runtime）。
+
+/// Lock guard 文件路径：`{budget_state_path}.lock`。专用锁文件（不锁
+/// budget.json 本身）让 rename(tmp, budget.json) 不被锁文件 inode 干扰。
+fn lock_path(state_path: &Path) -> PathBuf {
+    state_path.with_extension("json.lock")
+}
+
+/// 持锁的 BudgetState handle。`open` acquire 锁、读 + 初始化 state；调用方
+/// 在 lifetime 内 mutate state；`commit` 原子写回 + 释放锁；drop 也释放锁
+/// 但不 commit（panic 安全：进程崩溃 state 不被半写）。
+pub struct BudgetGuard {
+    state: BudgetState,
+    state_path: PathBuf,
+    _lock_file: File, // 持有 = 锁存在；drop 释放
+}
+
+impl BudgetGuard {
+    /// 打开 budget state + acquire exclusive flock。NotFound 视为首次运行，
+    /// 用 `cfg` 构造 fresh state。其他 load 错误（parse / schema mismatch /
+    /// IO）传给 caller —— 由调用方决定是 log + fresh 还是 bail。
+    pub fn open(cfg: &BudgetCfg) -> Result<Self, BudgetError> {
+        Self::open_at(cfg, &paths::budget_state_path())
+    }
+
+    /// 测试可注入的变体——指定 state 文件路径。
+    pub fn open_at(cfg: &BudgetCfg, state_path: &Path) -> Result<Self, BudgetError> {
+        // 1. 确保目录存在
+        if let Some(parent) = state_path.parent() {
+            fs::create_dir_all(parent).map_err(|source| BudgetError::SaveFailed {
+                path: state_path.to_path_buf(),
+                source,
+            })?;
+        }
+        // 2. 打开 / 创建锁文件 + 阻塞式 acquire exclusive flock
+        let lock_path = lock_path(state_path);
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|source| BudgetError::SaveFailed {
+                path: lock_path.clone(),
+                source,
+            })?;
+        lock_file.lock().map_err(|source| BudgetError::SaveFailed {
+            path: lock_path.clone(),
+            source,
+        })?;
+        // 3. 锁内读 state
+        let state = match File::open(state_path) {
+            Ok(mut f) => {
+                let mut buf = Vec::new();
+                f.read_to_end(&mut buf)
+                    .map_err(|source| BudgetError::LoadFailed {
+                        path: state_path.to_path_buf(),
+                        source,
+                    })?;
+                let parsed: BudgetState =
+                    serde_json::from_slice(&buf).map_err(|source| BudgetError::ParseFailed {
+                        path: state_path.to_path_buf(),
+                        source,
+                    })?;
+                if parsed.schema_version != BUDGET_SCHEMA_VERSION {
+                    return Err(BudgetError::SchemaVersionMismatch {
+                        found: parsed.schema_version,
+                        expected: BUDGET_SCHEMA_VERSION,
+                    });
+                }
+                parsed
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => BudgetState::from_cfg(cfg),
+            Err(source) => {
+                return Err(BudgetError::LoadFailed {
+                    path: state_path.to_path_buf(),
+                    source,
+                });
+            }
+        };
+        Ok(Self {
+            state,
+            state_path: state_path.to_path_buf(),
+            _lock_file: lock_file,
+        })
+    }
+
+    pub fn state(&self) -> &BudgetState {
+        &self.state
+    }
+
+    pub fn state_mut(&mut self) -> &mut BudgetState {
+        &mut self.state
+    }
+
+    /// 原子写回 state（atomic temp + rename）+ 释放锁（_lock_file drop）。
+    pub fn commit(self) -> Result<PathBuf, BudgetError> {
+        save_to(&self.state, &self.state_path)
+        // _lock_file 在此处 drop，flock 释放
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +339,68 @@ mod tests {
     #[test]
     fn schema_version_const_is_one() {
         assert_eq!(BUDGET_SCHEMA_VERSION, 1);
+    }
+
+    // --- codex round-4 P1: BudgetGuard 跨进程 RMW serialization ------------
+
+    #[test]
+    fn budget_guard_open_creates_fresh_state_on_first_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let cfg = small_cfg();
+        let guard = BudgetGuard::open_at(&cfg, &path).unwrap();
+        assert_eq!(guard.state().default.calls, 0);
+        assert_eq!(guard.state().default.max_calls, cfg.max_calls);
+    }
+
+    #[test]
+    fn budget_guard_commit_persists_then_reload_sees_state() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let cfg = small_cfg();
+        // 第一次打开 + consume 2 次 + commit
+        let mut guard = BudgetGuard::open_at(&cfg, &path).unwrap();
+        guard.state_mut().consume(0.1);
+        guard.state_mut().consume(0.2);
+        guard.commit().unwrap();
+        // 第二次打开应见持久状态
+        let guard2 = BudgetGuard::open_at(&cfg, &path).unwrap();
+        assert_eq!(guard2.state().default.calls, 2);
+        assert!((guard2.state().default.cost_usd - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn budget_guard_creates_lock_file_with_json_lock_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_path = tmp.path().join("budget.json");
+        let cfg = small_cfg();
+        let _guard = BudgetGuard::open_at(&cfg, &state_path).unwrap();
+        let expected_lock = tmp.path().join("budget.json.lock");
+        assert!(expected_lock.exists(), "lock file should be created");
+    }
+
+    #[test]
+    fn budget_guard_second_open_in_same_thread_blocks_until_first_drops() {
+        // 注意：本测试 sanity check 同进程 fd 上的 advisory flock 是否串行化。
+        // POSIX flock 在 Linux 是 per-file（inode）锁；不同 fd 也会阻塞。
+        // 我们用非阻塞 try_lock 验证：第二把锁应失败而不是阻塞死。
+        let tmp = tempfile::tempdir().unwrap();
+        let state_path = tmp.path().join("budget.json");
+        let cfg = small_cfg();
+        let _g1 = BudgetGuard::open_at(&cfg, &state_path).unwrap();
+        // 手动打开 lock 文件 + try_lock
+        let lock_path = state_path.with_extension("json.lock");
+        let f2 = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        // try_lock 不阻塞；持锁中应失败
+        let res = f2.try_lock();
+        assert!(
+            res.is_err(),
+            "second try_lock should fail while first guard holds the lock: {res:?}"
+        );
     }
 
     #[test]
