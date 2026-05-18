@@ -1,11 +1,14 @@
 ---
 doc_type: issue-report
 issue: 2026-05-18-init-shim-conflicts-npm-prefix
-status: confirmed
+status: resolved
 severity: P2
-summary: roostery init 在 npm 全局 prefix == 默认 shim target 路径时 RealLarkCliMissing fail；resolve_real_lark_cli 排除 shim_target 后无候选
-tags: [onboarding, init, shim, lark-cli, dogfood, ux]
-related_features: [2026-05-18-roostery-init, 2026-05-18-bot-stop-hook]
+summary: roostery init 在 npm 全局 prefix == 默认 shim target 路径时 RealLarkCliMissing fail；resolve_real_lark_cli 排除 shim_target 后无候选。**Resolved by feature 2026-05-18-init-real-lark-cli-override (commit aa06807, CI #26036982700)** — 加 `--real-lark-cli` flag + 复用 `ROOSTERY_LARK_CLI_BIN` env + resolve early-gate + 错误信息 3 sub-variant；真机 dogfood 完整跑通（含被动 CC SessionEnd 真飞书出 task）
+tags: [onboarding, init, shim, lark-cli, dogfood, ux, resolved]
+related_features: [2026-05-18-roostery-init, 2026-05-18-bot-stop-hook, 2026-05-18-init-real-lark-cli-override]
+resolved_by: 2026-05-18-init-real-lark-cli-override
+resolved_at: 2026-05-18
+resolved_commit: aa06807
 discovered_during: bot-stop-hook 真机 dogfood
 ---
 
