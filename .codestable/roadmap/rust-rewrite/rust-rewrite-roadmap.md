@@ -518,7 +518,9 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
     - 主要支持的 req：—（项目维护）
     - 备注：Phase 7；这一条对应 brainstorm 的"README 改写"显式任务 + 项目终态切换
 
-**最小闭环 ✅ 达成**：第 16 条 `bot-stop-hook` **2026-05-18 落地**（commit `220c7b0`，CI run #26030808131 全绿）→ CC headless 会话能在飞书 app 看到新任务 + step，**且**任意 agent / 脚本可通过 `roostery bot push` 主动推送。这一刻 = "Rust 可用"判据成立 = **0.1.0 release 触发点达成**（参 brainstorm v0.x-direction "首个 release"决议）。下一步：(a) 真机 dogfood（roostery init + CC + 手机飞书看 task）；(b) 0.1.0 release 准备（README / CHANGELOG / crates.io）。后续条目（17 / 18 / 19 / 20 / 21）是 0.1.0 之后到 1.0 之间的扩展。
+**最小闭环 ✅ 达成**：第 16 条 `bot-stop-hook` **2026-05-18 落地**（commit `220c7b0`，CI run #26030808131 全绿）→ CC headless 会话能在飞书 app 看到新任务 + step，**且**任意 agent / 脚本可通过 `roostery bot push` 主动推送。这一刻 = "Rust 可用"判据成立 = **0.1.0 release 触发点达成**（参 brainstorm v0.x-direction "首个 release"决议）。
+
+**0.1.0 ✅ 已 tag**（2026-05-18，feature `2026-05-18-release-0.1.0-prep` accept）：version bump `0.0.0 → 0.1.0` + `git tag v0.1.0`（本地，push 时机用户自决）+ README 五段重写 user-why leading + CHANGELOG.md 起步 + workspace Cargo.toml metadata 7 字段补齐（0.2.0 crates.io 预热）。**0.1.x 不上 crates.io** — `cargo publish --dry-run` 推到 0.2.0 前夜独立 feature。后续条目（17 / 18 / 19 / 20 / 21）是 0.1.0 之后到 1.0 之间的扩展。
 
 ## 6. 排期思路
 

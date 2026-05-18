@@ -3,8 +3,16 @@ resolver = "2"
 members = ["crates/roostery"]
 
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
+rust-version = "1.95"
 license = "MIT"
 authors = ["Ben Dusy <ben@bendusy.dev>"]
 repository = "https://github.com/bendusy/roostery"
+homepage = "https://github.com/bendusy/roostery"
+documentation = "https://github.com/bendusy/roostery"
+readme = "README.md"
+description = "🪺 Vendor-neutral, Feishu-native agent broker for multi-device vibecoding."
+# crates.io category_slugs verified 2026-05-18 against https://crates.io/category_slugs
+categories = ["command-line-utilities", "development-tools", "api-bindings"]
+keywords = ["agent", "feishu", "lark", "broker", "vibecoding"]

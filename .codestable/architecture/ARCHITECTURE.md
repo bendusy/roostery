@@ -2,13 +2,13 @@
 
 > 状态：active（Rust 重写期更新）
 > 创建日期：2026-05-15
-> 末次刷新：2026-05-18（init-real-lark-cli-override feature accept；onboarding UX hole 根治 + 真机被动 hook dogfood 完成）
+> 末次刷新：2026-05-18（release-0.1.0-prep feature accept；version bump 0.0.0 → 0.1.0 + README 五段重写 user-why leading + CHANGELOG.md 起步 + workspace Cargo.toml metadata 7 字段补齐为 0.2.0 crates.io 预热；首个 release 对外门面形态达成）
 
 ## 1. 项目简介
 
 **Roostery** — vendor-neutral, Feishu-native agent broker。本地 daemon，将任意 agent runtime（Claude Code / Codex / Gemini / OpenClaw / 自定义 Python）桥接到飞书（Lark）作为**跨设备 vibecoding 协作面**。核心动机见 `.codestable/brainstorms/v0.x-direction/`。
 
-**阶段**：Rust 重写中（自 2026-05-15）。仓库未发布任何版本——首个 0.1.0 等到 Rust 达到"可用"形态（roadmap Phase 5 完成）。
+**阶段**：Rust **0.1.0 已 tag**（2026-05-18）。"Rust 可用" 判据 = Phase 5 minimal-loop closing 已达成（feature `bot-stop-hook` 2026-05-18 落地），首个 release 形态完成；0.2.0 待 crates.io publish 决策。
 
 **目录布局**：
 

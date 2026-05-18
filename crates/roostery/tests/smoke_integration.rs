@@ -98,7 +98,7 @@ fn version_string_locked() {
         .expect("roostery spawn");
     assert_eq!(
         String::from_utf8_lossy(&out.stdout).trim(),
-        "roostery 0.0.0 (rust)"
+        "roostery 0.1.0 (rust)"
     );
 }
 
@@ -109,6 +109,6 @@ fn no_args_prints_welcome() {
         .expect("roostery spawn");
     assert!(out.status.success());
     let s = String::from_utf8_lossy(&out.stdout);
-    assert!(s.contains("roostery 0.0.0 (rust)"));
+    assert!(s.contains("roostery 0.1.0 (rust)"));
     assert!(s.contains("https://github.com/bendusy/roostery"));
 }

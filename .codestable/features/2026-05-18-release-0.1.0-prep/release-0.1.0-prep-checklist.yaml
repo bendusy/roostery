@@ -1,0 +1,108 @@
+feature: 2026-05-18-release-0.1.0-prep
+source_design: release-0.1.0-prep-design.md
+generated_at: 2026-05-18
+note: |
+  纯文档 + metadata feature；无 Rust 业务代码改动。design §2.5 结论"不做微重构"，
+  故无 S0。git tag v0.1.0（F7）归 accept 阶段，不在 implement checklist。
+  paradigm 维度切片 5 步线性，与 design §2.4 表一一对应。
+
+steps:
+  - id: S1
+    paradigm: 文档 / 用户面
+    action: |
+      重写 README.md 五段结构（Hero / 状态 / Quickstart / 技术属性 / 跟谁错位）。
+      Hero 段从 .codestable/requirements/agent-work-in-feishu.md "为什么需要" 首段
+      提炼 ≤ 100 字，多设备 vibecoding 痛点 + 数据主权前置，技术属性下移；
+      状态段更新 "0.1.0 已发"；Quickstart 贴 roostery init --real-lark-cli + bot push --json；
+      技术属性段精简；跟谁错位表全文保留。
+    exit_signal: |
+      markdown 渲染无 syntax 错；grep 命中：多设备 vibecoding / 数据主权 /
+      roostery init / roostery bot push / 0.1.0 / MIT。
+    status: done
+
+  - id: S2
+    paradigm: 文档 / release notes
+    action: |
+      新建 CHANGELOG.md（Keep a Changelog 1.1.0 格式）。header + [Unreleased] +
+      [0.1.0] - 2026-05-18 章节；扫 .codestable/features/2026-* 17 子目录读
+      design.frontmatter.summary 抽 highlights；按 Added（新能力）/ Fixed
+      （init-shim-conflicts-npm-prefix）/ Documentation（README + CHANGELOG）
+      分类；末尾 ref-style link def 指向 GH compare URL。
+    exit_signal: |
+      CHANGELOG markdown 无 syntax 错；17 feature slug 全部出现在文件中（grep 守护）；
+      link refs 指向 https://github.com/bendusy/roostery/compare/v0.1.0...HEAD 形式。
+    status: done
+
+  - id: S3
+    paradigm: metadata / packaging
+    action: |
+      workspace Cargo.toml 的 [workspace.package] 段添加 7 字段：description /
+      keywords（5 个 lowercase 单 word：agent feishu lark broker vibecoding）/
+      categories（≤ 5：command-line-utilities / development-tools / api-bindings）/
+      readme = "README.md" / homepage / documentation / rust-version（读
+      rust-toolchain.toml + cargo build 实测校准）。
+      crates/roostery/Cargo.toml 把 description = "..." 改 description.workspace = true。
+    exit_signal: |
+      cargo build -p roostery 全绿；cargo metadata --no-deps 输出含新字段且值正确；
+      keywords 全 lowercase 单 word ≤ 5；categories 在 crates.io 官方列表内。
+    status: done
+
+  - id: S4
+    paradigm: 版本号 bump
+    action: |
+      workspace Cargo.toml [workspace.package] version = "0.0.0" → "0.1.0"。
+      不动 crate-level（已 version.workspace = true）。
+    exit_signal: |
+      ./target/debug/roostery --version 输出 "roostery 0.1.0 (rust)"；
+      cargo build 全绿；Cargo.lock 自动重生且仅 roostery 一行 version 变。
+    status: done
+
+  - id: S5
+    paradigm: 完整验收 + 守护 grep
+    action: |
+      本地四绿核对：cargo fmt --all --check / cargo clippy --all-targets
+      --all-features -- -D warnings / cargo test --all / cargo test --doc。
+      grep 守护：
+        (a) README 含 "多设备" + "vibecoding" + "0.1.0" + "MIT" + Quickstart 块
+        (b) CHANGELOG 含 17 feature slug
+        (c) Cargo.toml workspace 段 7 新字段全在位
+        (d) version "0.1.0" 单点（仅 workspace.package 一处）
+      反向核对（design §3.2）：grep "cargo publish" / "git push --tags" /
+      "gh release create" = 0；git diff LICENSE / index.js / package.json = 0；
+      git diff Cargo.toml -- '[dependencies]' 不增减依赖。
+    exit_signal: |
+      本地四命令全绿；所有 grep 守护 pass；反向核对全 0；
+      （CI 验证留给 user commit + push 后看 GH Actions）。
+    status: done
+
+checks:
+  scenarios_covered:
+    - A1_hero_user_why_leading: S1 + S5(a)
+    - A2_description_meaningful: S3
+    - A3_cargo_install_metadata_ok: S3 + S5
+    - A4_version_output: S4 + S5(d)
+    - A5_changelog_0.1.0_section: S2 + S5(b)
+    - A6_metadata_ready_for_0.2.0_publish: S3 + S5(c)
+    - B1_emoji_render: S1 markdown lint
+    - B2_changelog_compare_link: S2 link defs
+    - B3_keywords_constraint: S3 exit_signal
+    - B4_quickstart_commands_exact: S1 对照 --help 校准
+    - E1_keywords_uppercase: S3 + S5 grep
+    - E2_categories_official: S3 + 注释标 verified
+    - E3_readme_missing_cli: S5(a) grep
+    - E4_changelog_missing_feature: S5(b) grep
+    - E5_version_inconsistent: S5(d) grep
+  reverse_checks:
+    - no_cargo_publish: S5 反向核对
+    - no_git_push_tags: S5 反向核对
+    - no_gh_release_create: S5 反向核对
+    - no_license_diff: S5 反向核对
+    - no_npm_diff: S5 反向核对
+    - no_new_cargo_dep: S5 反向核对
+    - no_community_docs: S5 守护（仅 CHANGELOG.md 新增）
+    - no_multilang_readme: S5 守护（ls README*.md 仅一个）
+
+undecided:
+  - U1_changelog_grouping: implement S2 时读完 17 feature summary 决定（时间序 vs 重要性序）
+  - U2_quickstart_dogfood_step: implement S1 时对照 acceptance 验收契约决定
+  - U3_rust_version_value: implement S3 时读 rust-toolchain.toml + cargo build 实测校准
