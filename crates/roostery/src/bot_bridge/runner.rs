@@ -573,10 +573,50 @@ mod tests {
         RunnerRegistry::new().with_runner(Box::new(runner))
     }
 
+    /// 给 MockLarkRunner 灌满 relay_task 调用所需 N 次 lark 响应（identity::current
+    /// 占 2 次：auth status + profile list；create_task 占 1 次；append_steps 各占 1 次）。
+    /// `appends` 是预计的 append_steps 次数（start + 0..n adjust + end）。
+    fn enqueue_relay_for(mock: &MockLarkRunner, appends: usize) {
+        // identity::current（assignee None 路径走 auth status + profile list）
+        mock.enqueue_ok(serde_json::json!({
+            "userOpenId": "ou_user_123",
+            "userName": "TestUser",
+            "appId": "cli_app",
+            "tokenStatus": "valid",
+        }));
+        mock.enqueue_ok(serde_json::json!([{"name": "default", "active": true}]));
+        // create_task
+        mock.enqueue_ok(serde_json::json!({
+            "ok": true,
+            "data": { "guid": "g_test", "url": "https://feishu.cn/task/test" }
+        }));
+        for _ in 0..appends {
+            mock.enqueue_ok(serde_json::json!({"ok": true}));
+        }
+    }
+
+    /// 让本模块的 test 都跑在隔离的 ROOSTERY_HOME 下，避免污染 ~/.roostery。
+    /// 调用方需要持锁 ENV_LOCK 并保存 TempDir 直到测试结束。
+    fn isolate_for_test() -> (tempfile::TempDir, std::sync::MutexGuard<'static, ()>) {
+        let g = crate::paths::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        unsafe { std::env::set_var("ROOSTERY_HOME", tmp.path()) };
+        unsafe { std::env::set_var("ROOSTERY_HOST", "m4") };
+        (tmp, g)
+    }
+    fn restore_for_test() {
+        unsafe { std::env::remove_var("ROOSTERY_HOME") };
+        unsafe { std::env::remove_var("ROOSTERY_HOST") };
+    }
+
     // --- tests -----------------------------------------------------------
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn success_outcome_returns_bot_action_success() {
+        let (_tmp, _g) = isolate_for_test();
         let runner = TestRunner::new(
             "test_runner",
             vec![TestKind::Success {
@@ -587,6 +627,7 @@ mod tests {
         let active = Arc::new(ActiveRunnerRegistry::new());
         let (journal, _td) = mk_journal();
         let mock = MockLarkRunner::new();
+        enqueue_relay_for(&mock, 2); // start + end
         let bot = mk_bot("test_runner");
         let ev = mk_event("oc_x", "om_1", "@tl do it");
 
@@ -606,10 +647,13 @@ mod tests {
             }
             other => panic!("expected Success, got {other:?}"),
         }
+        restore_for_test();
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn failed_outcome_returns_bot_action_failed() {
+        let (_tmp, _g) = isolate_for_test();
         let runner = TestRunner::new(
             "test_runner",
             vec![TestKind::Failed {
@@ -620,6 +664,7 @@ mod tests {
         let active = Arc::new(ActiveRunnerRegistry::new());
         let (journal, _td) = mk_journal();
         let mock = MockLarkRunner::new();
+        enqueue_relay_for(&mock, 2);
         let bot = mk_bot("test_runner");
         let ev = mk_event("oc_x", "om_2", "@tl do it");
 
@@ -632,15 +677,19 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+        restore_for_test();
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn timeout_outcome_returns_bot_action_timeout() {
+        let (_tmp, _g) = isolate_for_test();
         let runner = TestRunner::new("test_runner", vec![TestKind::Timeout]);
         let reg = registry_with(runner);
         let active = Arc::new(ActiveRunnerRegistry::new());
         let (journal, _td) = mk_journal();
         let mock = MockLarkRunner::new();
+        enqueue_relay_for(&mock, 2);
         let bot = mk_bot("test_runner");
         let ev = mk_event("oc_x", "om_3", "@tl do it");
 
@@ -648,10 +697,13 @@ mod tests {
             .await
             .expect("handle ok");
         assert!(matches!(action, BotAction::Timeout { .. }));
+        restore_for_test();
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn unknown_runner_kind_returns_skipped_and_writes_journal() {
+        let (_tmp, _g) = isolate_for_test();
         let reg = RunnerRegistry::new(); // 空 registry
         let active = Arc::new(ActiveRunnerRegistry::new());
         let (journal, td) = mk_journal();
@@ -681,22 +733,15 @@ mod tests {
             }
         }
         assert!(found, "expected event:skipped journal entry");
+        restore_for_test();
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn abort_signal_returns_bot_action_aborted() {
+        let (_tmp, _g) = isolate_for_test();
         // runner 跑得久；外部信号 Abort 触发后 select 命中 kill_rx
-        let runner = TestRunner::new(
-            "test_runner",
-            vec![TestKind::SuccessAfterDelay {
-                delay: Duration::from_secs(5),
-                stdout: "should not see".into(),
-            }],
-        );
-        let reg = registry_with(runner);
         let active = Arc::new(ActiveRunnerRegistry::new());
-        let (journal, _td) = mk_journal();
-        let mock = MockLarkRunner::new();
         let bot = mk_bot("test_runner");
         let ev = mk_event("oc_abort", "om_abort", "@tl do it");
 
@@ -705,9 +750,10 @@ mod tests {
         let ev_clone = ev.clone();
         // spawn handle_event；主测试线程稍等触发 abort
         let handle = tokio::spawn(async move {
-            // 把 journal / mock / registry 移进闭包
             let (j, _td) = mk_journal();
             let mock = MockLarkRunner::new();
+            // Aborted 路径 = start + end → 2 appends
+            enqueue_relay_for(&mock, 2);
             let runner_inner = TestRunner::new(
                 "test_runner",
                 vec![TestKind::SuccessAfterDelay {
@@ -718,11 +764,6 @@ mod tests {
             let reg_inner = registry_with(runner_inner);
             handle_event(&ev_clone, &bot_clone, &mock, &reg_inner, &active2, &j).await
         });
-
-        // 避免清理外层未用变量警告
-        drop(journal);
-        drop(mock);
-        drop(reg);
 
         // 等待 handle_event 注册 active handle（轮询）
         let guid_opt = wait_for_chat(&active, "oc_abort", Duration::from_millis(500)).await;
@@ -743,10 +784,13 @@ mod tests {
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
+        restore_for_test();
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn adjust_within_limit_then_success() {
+        let (_tmp, _g) = isolate_for_test();
         // 第一次 run = 长跑（被 /adjust 打断）；第二次 run = 立即 Success
         let runner = TestRunner::new(
             "test_runner",
@@ -771,6 +815,8 @@ mod tests {
         let handle = tokio::spawn(async move {
             let (j, _td) = mk_journal();
             let mock = MockLarkRunner::new();
+            // start + 1 adjust + end = 3 appends
+            enqueue_relay_for(&mock, 3);
             handle_event(&ev, &bot, &mock, &reg2, &active2, &j).await
         });
 
@@ -800,10 +846,13 @@ mod tests {
             }
             other => panic!("expected Success after adjust, got {other:?}"),
         }
+        restore_for_test();
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn adjust_exceeding_limit_becomes_aborted() {
+        let (_tmp, _g) = isolate_for_test();
         // 第一、二次都是长跑；连发两次 Adjust → 第二次超 ADJUST_MAX → Aborted
         let runner = TestRunner::new(
             "test_runner",
@@ -829,6 +878,9 @@ mod tests {
         let handle = tokio::spawn(async move {
             let (j, _td) = mk_journal();
             let mock = MockLarkRunner::new();
+            // start + 1 adjust + end = 3 appends（第 2 次 adjust 命中上限直接转 aborted，
+            // 不再触发 record_adjust 的 append）
+            enqueue_relay_for(&mock, 3);
             handle_event(&ev, &bot, &mock, &reg2, &active2, &j).await
         });
 
@@ -868,6 +920,7 @@ mod tests {
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
+        restore_for_test();
     }
 
     /// 轮询 active_registry 直到出现指定 chat_id 的 handle 或超时。

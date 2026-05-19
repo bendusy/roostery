@@ -20,7 +20,7 @@ steps:
 
   - action: "持久化 + 接力：paths.rs 加 bot_chat_cache_dir helper；relay_task.rs 实装 record_start / record_end / record_adjust + BOT_CHAT_CACHE_SCHEMA_VERSION=1 + cache 文件 atomic .tmp+rename"
     exit_signal: "单测覆盖同 chat 多次 record_start 写同一 TaskGuid（cache hit）+ cache schema_version 缺失向后兼容 + safe_filename 路径跳出防御 + EndOutcome 四态 step 文案匹配；与已有 bot_task_writer::session_tasks/ 同目录平级不互相干扰"
-    status: pending
+    status: done
 
   - action: "IM 事件源：event.rs 实装 ImEvent + consume_im（spawn lark-cli im_messages_subscribe 子进程 + BufReader::lines NDJSON 反序列化 + 指数退避重连，cap 60s）+ EventError"
     exit_signal: "integration test 用 MockLarkRunner 模拟 stdout 多行 NDJSON 流：3 行有效 + 1 行损坏 JSON skip + 子进程 EOF 触发重连；stream Item 数与有效事件数一致"
