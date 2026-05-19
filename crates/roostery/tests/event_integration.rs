@@ -175,3 +175,45 @@ async fn s6_3_spawn_failure_reports_and_keeps_retrying() {
     drop(stream.rx);
     let _ = tokio::time::timeout(Duration::from_secs(2), stream.join).await;
 }
+
+/// codex round-8 P1 真正修复回归：lark-cli 吐出 oversized 行（>max_line_bytes）
+/// 时，consume_im 内部 line_buf 必须实时被 cap 中止 + 进入 skipping 模式，
+/// 不允许整行先全部读入再丢弃（之前 partial 修复行为）。
+/// 这里 max_line_bytes=128，fixture 吐 8KiB 'A' 字符 + '\n' + 一条合法 NDJSON +
+/// 'X' 字符 1MiB（无换行）+ EOF。期望:
+/// - 8KiB 的 oversized 行触发 cap + skip
+/// - 合法 NDJSON 被正常解析（证明 cap 不破坏后续 line 边界）
+/// - 1MiB 无换行尾巴在 EOF 时 line_buf 已被 cap 中止累积（不 OOM）
+#[tokio::test]
+async fn s8_oversized_line_streaming_cap_does_not_oom_and_resumes_parsing() {
+    let body = r#"head -c 8192 < /dev/zero | tr '\0' 'A'
+echo
+echo '{"message_id":"good","chat_id":"c","chat_type":"group","message_type":"text","sender_id":"u","content":"hi"}'
+head -c 1048576 < /dev/zero | tr '\0' 'X'
+"#;
+    let (_d, path) = fixture_script(body);
+    let mut o = opts(path);
+    o.max_line_bytes = 128;
+    o.max_events = 1;
+
+    let mut stream = consume_im(o);
+    let mut events = Vec::new();
+    let mut errors = 0usize;
+
+    let collect = async {
+        while let Some(item) = stream.rx.recv().await {
+            match item {
+                Ok(ev) => events.push(ev),
+                Err(_) => errors += 1,
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), collect)
+        .await
+        .expect("stream should close in <5s; cap working means no OOM");
+
+    assert_eq!(events.len(), 1, "1 valid event after oversized line");
+    assert_eq!(events[0].message_id, "good");
+
+    let _ = stream.join.await;
+}

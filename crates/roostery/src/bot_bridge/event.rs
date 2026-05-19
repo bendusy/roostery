@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -168,101 +168,117 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
         let spawn_at = Instant::now();
         match spawn_subscribe(&opts.binary, &opts.profile) {
             Ok((mut child, stdout, stderr_tail)) => {
-                let mut reader = BufReader::new(stdout).lines();
-                loop {
-                    // codex round-8 P1: read 路径加 cancel 分支；biased 优先
-                    // 让 shutdown 立即响应。next_line future drop 时底层 buf
-                    // 不影响——下次 spawn 重建 reader。
-                    let line_res = if let Some(c) = &opts.cancel {
+                let mut reader = BufReader::new(stdout);
+                // codex round-8 P1 真正修复：用手撸 chunked-read 替代
+                // `BufReader::lines()`，让 max_line_bytes 在 read 过程中实
+                // 时生效——超 cap 即时 clear + 标 skipping_oversized 模式，
+                // 后续 bytes 继续 drain 直到下个 '\n'（保持 pipe 畅通），
+                // 期间内存上界 = max_line_bytes（默认 1 MiB）。
+                let mut line_buf: Vec<u8> = Vec::with_capacity(8 * 1024);
+                let mut skipping_oversized = false;
+                let mut io_chunk = [0u8; 4096];
+                let exit_inner: Option<ImInnerExit> = loop {
+                    let n_res = if let Some(c) = &opts.cancel {
                         tokio::select! {
                             biased;
                             _ = c.cancelled() => {
                                 let _ = child.kill().await;
                                 return;
                             }
-                            line = reader.next_line() => line,
+                            r = reader.read(&mut io_chunk) => r,
                         }
                     } else {
-                        reader.next_line().await
+                        reader.read(&mut io_chunk).await
                     };
-                    match line_res {
-                        Ok(Some(line)) => {
-                            // Defense vs runaway producer: lark-cli accidentally
-                            // emitting a huge / no-newline frame would otherwise
-                            // grow next_line()'s internal String unbounded. Cap
-                            // here drops the offending line + warns; subsequent
-                            // well-formed lines continue normally. Note: this
-                            // bounds *post-arrival* damage; a single malicious
-                            // long line can still allocate up to max_line_bytes
-                            // before being dropped — full streaming cap is its
-                            // own larger refactor (see followup observation).
-                            if line.len() > opts.max_line_bytes {
+                    let n = match n_res {
+                        Ok(0) => break Some(ImInnerExit::Eof),
+                        Ok(n) => n,
+                        Err(io_err) => break Some(ImInnerExit::ReadErr(io_err)),
+                    };
+                    // 处理本块字节，识别行边界 + cap line_buf。
+                    for &b in &io_chunk[..n] {
+                        if b == b'\n' {
+                            if skipping_oversized {
                                 tracing::warn!(
-                                    line_bytes = line.len(),
-                                    max = opts.max_line_bytes,
-                                    "oversized NDJSON line dropped"
+                                    target: "bot_bridge::event",
+                                    "oversized NDJSON line ended; resumed normal parsing"
                                 );
-                                continue;
-                            }
-                            let trimmed = line.trim();
-                            if trimmed.is_empty() {
-                                continue;
-                            }
-                            match serde_json::from_str::<ImEvent>(trimmed) {
-                                Ok(ev) => {
-                                    if tx.send(Ok(ev)).await.is_err() {
-                                        // receiver dropped → 终止；子进程随 kill_on_drop 被 SIGKILL。
-                                        let _ = child.kill().await;
-                                        return;
-                                    }
-                                    events_emitted += 1;
-                                    if opts.max_events > 0 && events_emitted >= opts.max_events {
-                                        let _ = child.kill().await;
-                                        return;
+                                skipping_oversized = false;
+                            } else {
+                                let trimmed_bytes = trim_ascii_whitespace(&line_buf);
+                                if !trimmed_bytes.is_empty() {
+                                    match serde_json::from_slice::<ImEvent>(trimmed_bytes) {
+                                        Ok(ev) => {
+                                            if tx.send(Ok(ev)).await.is_err() {
+                                                let _ = child.kill().await;
+                                                return;
+                                            }
+                                            events_emitted += 1;
+                                            if opts.max_events > 0
+                                                && events_emitted >= opts.max_events
+                                            {
+                                                let _ = child.kill().await;
+                                                return;
+                                            }
+                                        }
+                                        Err(parse_err) => {
+                                            let preview: String =
+                                                String::from_utf8_lossy(trimmed_bytes)
+                                                    .chars()
+                                                    .take(200)
+                                                    .collect();
+                                            tracing::warn!(
+                                                target: "bot_bridge::event",
+                                                error = %parse_err,
+                                                line_preview = %preview,
+                                                "skip corrupt NDJSON line"
+                                            );
+                                        }
                                     }
                                 }
-                                Err(parse_err) => {
-                                    // 单行损坏 → skip + warn，不中断流。
-                                    let preview: String = trimmed.chars().take(200).collect();
-                                    tracing::warn!(
-                                        target: "bot_bridge::event",
-                                        error = %parse_err,
-                                        line_preview = %preview,
-                                        "skip corrupt NDJSON line"
-                                    );
-                                }
+                            }
+                            line_buf.clear();
+                        } else if !skipping_oversized {
+                            if line_buf.len() >= opts.max_line_bytes {
+                                tracing::warn!(
+                                    target: "bot_bridge::event",
+                                    cap = opts.max_line_bytes,
+                                    "NDJSON line exceeds max_line_bytes; dropping until next newline"
+                                );
+                                line_buf.clear();
+                                skipping_oversized = true;
+                            } else {
+                                line_buf.push(b);
                             }
                         }
-                        Ok(None) => {
-                            // EOF —— 子进程关闭 stdout，等回收并触发重连。
-                            let exit_code = match child.wait().await {
-                                Ok(status) => status.code(),
-                                Err(_) => None,
-                            };
-                            // 把 EOF 当 abnormal exit 上报（lark-cli subscribe 是长连接，
-                            // 不期望 EOF），但不阻断 stream。stderr_tail 由 spawn_subscribe
-                            // 后台 drain task 实时收集，wait 完成后已含完整 tail。
-                            let stderr_str = stderr_tail
-                                .lock()
-                                .map(|g| String::from_utf8_lossy(&g).into_owned())
-                                .unwrap_or_default();
-                            let err = EventError::ChildExitedAbnormally {
-                                exit_code,
-                                stderr_tail: stderr_str,
-                            };
-                            if tx.send(Err(err)).await.is_err() {
-                                return;
-                            }
-                            break;
-                        }
-                        Err(io_err) => {
-                            let _ = child.kill().await;
-                            if tx.send(Err(EventError::ReadFailed(io_err))).await.is_err() {
-                                return;
-                            }
-                            break;
+                        // else: skipping_oversized && b != '\n' → discard byte
+                    }
+                };
+                match exit_inner {
+                    Some(ImInnerExit::Eof) => {
+                        let exit_code = match child.wait().await {
+                            Ok(status) => status.code(),
+                            Err(_) => None,
+                        };
+                        let stderr_str = stderr_tail
+                            .lock()
+                            .map(|g| String::from_utf8_lossy(&g).into_owned())
+                            .unwrap_or_default();
+                        let err = EventError::ChildExitedAbnormally {
+                            exit_code,
+                            stderr_tail: stderr_str,
+                        };
+                        if tx.send(Err(err)).await.is_err() {
+                            return;
                         }
                     }
+                    Some(ImInnerExit::ReadErr(io_err)) => {
+                        let _ = child.kill().await;
+                        if tx.send(Err(EventError::ReadFailed(io_err))).await.is_err() {
+                            return;
+                        }
+                    }
+                    None => unreachable!("loop exits only via break Some(...)"),
                 }
                 // 子进程结束后判断是否需要 reset backoff
                 if spawn_at.elapsed() >= opts.backoff_reset_after {
@@ -293,6 +309,24 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
         }
         backoff = (backoff.saturating_mul(2)).min(opts.max_backoff);
     }
+}
+
+enum ImInnerExit {
+    Eof,
+    ReadErr(std::io::Error),
+}
+
+fn trim_ascii_whitespace(buf: &[u8]) -> &[u8] {
+    let start = buf
+        .iter()
+        .position(|b| !b.is_ascii_whitespace())
+        .unwrap_or(buf.len());
+    let end = buf
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(start);
+    &buf[start..end]
 }
 
 type SubscribeChild = (
