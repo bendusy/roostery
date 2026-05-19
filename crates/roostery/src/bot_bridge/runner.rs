@@ -231,11 +231,11 @@ pub async fn handle_event(
                         value: serde_json::Value::Null,
                     },
                 )?;
-                // record_adjust 占位调用（step 5 实装真实 step 写入）
                 if let Some(ref tr) = task_ref {
                     crate::bot_bridge::relay_task::record_adjust(
                         lark,
                         bot,
+                        &event.chat_id,
                         tr,
                         &body,
                         adjust_attempts,

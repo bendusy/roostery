@@ -303,22 +303,18 @@ pub async fn record_start(
 }
 
 /// 记录 /adjust 重启：append step "🔁 用户调整 (attempt N): ..." + cache.adjust_count += 1。
+///
+/// `chat_id` 是 cache 索引键——record_start / record_end 已按 chat_id 落 cache，
+/// 本 fn 需读回同一条 entry 累加 adjust_count，因此 caller 必须把 chat_id 一起传。
 pub async fn record_adjust(
     lark: &dyn LarkRunner,
     bot: &BotRole,
+    chat_id: &str,
     task_ref: &TaskRef,
     adjust_text: &str,
     attempt: u32,
 ) -> Result<(), RelayTaskError> {
-    let path = cache_path_for(&bot.app_id, &chat_id_from_task_ref_fallback(task_ref));
-    // task_ref 不带 chat_id；通过 cache 反查是 lookup-by-guid 的范畴，本期 cache
-    // 是按 chat 索引——caller (runner.rs) 实际是从 record_start 的 task_ref + event.chat_id
-    // 调过来的，正确做法：在签名扩 chat_id。为保持签名稳定（与 step 4 占位一致），
-    // 这里走"caller 已经握有 task_ref，cache 只更新计数器，找不到 cache 也不阻塞"
-    // 的语义：lookup-by-guid 路径过重，留待 chat_id 入参 refactor（observation）。
-    //
-    // 实务：cache 路径用 task_ref.guid 的派生兜底——失败也只是计数器丢失，不影响
-    // 用户可见的飞书 step 流（这是缓存的本质：丢了重建即可）。
+    let path = cache_path_for(&bot.app_id, chat_id);
     if let Ok(Some(mut entry)) = load_cache(&path) {
         entry.adjust_count = entry.adjust_count.saturating_add(1);
         save_cache(&path, &entry)?;
@@ -368,16 +364,6 @@ pub async fn record_end(
         .with_profile(&bot.app_id);
     append_steps(lark, &task_ref.guid, &[step.as_str()], opts).await?;
     Ok(Some(task_ref))
-}
-
-/// `record_adjust` 兜底：task_ref 不带 chat_id，但常见场景下 cache 文件名是
-/// 按 chat_id 落的——这里返回一个不可能命中的串，让 `load_cache` 返 None
-/// 走静默退化（adjust_count 是观察项不是不变量）。
-///
-/// 与 design 的差异：design 的 record_adjust 签名没传 chat_id；本期为不破坏
-/// runner.rs 占位调用点签名而保留——后续 chat_id 入参化是小 refactor。
-fn chat_id_from_task_ref_fallback(task_ref: &TaskRef) -> String {
-    format!("__no_chat_id__{}", task_ref.guid.as_str())
 }
 
 // =====================================================================
@@ -627,6 +613,44 @@ mod tests {
     }
 
     // --- T6: record_end 追加正确 outcome step ---------------------------
+
+    #[tokio::test]
+    async fn record_adjust_increments_cache_count() {
+        // 验证 chat_id 入参后 cache.adjust_count 真实递增（之前 task_ref.guid
+        // 兜底派生路径 cache miss → 计数器丢失）。
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        isolate_home(&tmp);
+
+        let mock = MockLarkRunner::new();
+        enqueue_record_start_miss(&mock);
+        // 两次 adjust 各 1 次 append_steps 调用
+        mock.enqueue_ok(json!({"ok": true}));
+        mock.enqueue_ok(json!({"ok": true}));
+
+        let bot = mk_bot("cli_bot_adj");
+        let ev = mk_event("oc_adj_chat", "om_init");
+        let task_ref = record_start(&mock, &bot, &ev, "init brief")
+            .await
+            .unwrap()
+            .unwrap();
+
+        record_adjust(&mock, &bot, &ev.chat_id, &task_ref, "first adjust", 1)
+            .await
+            .unwrap();
+        record_adjust(&mock, &bot, &ev.chat_id, &task_ref, "second adjust", 2)
+            .await
+            .unwrap();
+
+        let path = cache_path_for(&bot.app_id, &ev.chat_id);
+        let entry = load_cache(&path).unwrap().expect("cache entry exists");
+        assert_eq!(
+            entry.adjust_count, 2,
+            "two adjusts must increment cache counter to 2"
+        );
+
+        restore_home();
+    }
 
     #[tokio::test]
     async fn record_end_appends_outcome_step_and_persists() {
