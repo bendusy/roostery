@@ -22,3 +22,6 @@ build/
 *.log
 /docs/
 /planning/
+
+# Tool caches (codegraph drops local DB + cache here)
+.codegraph/
