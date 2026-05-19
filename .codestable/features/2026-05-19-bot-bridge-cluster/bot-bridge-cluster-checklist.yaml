@@ -28,7 +28,7 @@ steps:
 
   - action: "daemon 主循环：daemon.rs 实装 run_bridge 串 mpsc + per-bot consume_im task + central HITL→spawn handle_event 分流 + tokio::signal::ctrl_c graceful shutdown + BridgeReport 聚合"
     exit_signal: "integration test 端到端跑：feed 6 条假 event（2 条 @bot + 1 条 /stop + 1 条 /adjust + 1 条 noise + 1 条非匹配 chat），daemon 处理完正常退出，journal 序列含预期 source/action 条目；ctrl_c 触发后 active handle_event 协程 deadline 内退出"
-    status: pending
+    status: done
 
   - action: "测试覆盖收尾 + 反向核对：补齐 §3 边界 / 错误场景剩余条目 + 跑红线 grep（reqwest / Command::new(\"lark-cli\") / FEISHU_HUB_* / os::unix signal / base_intent_router）确认 bot_bridge/ 内 0 命中"
     exit_signal: "cargo test --all 全绿 + cargo clippy --all-targets --all-features -- -D warnings 全绿 + cargo fmt --all --check pass + §3 验收契约 N1-N4 / B1-B6 / E1-E4 / G1-G6 全部有可观察证据"

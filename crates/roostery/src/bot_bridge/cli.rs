@@ -41,6 +41,7 @@ impl BridgeCliArgs {
             max_events: self.max_events,
             timeout: self.timeout.map(Duration::from_secs),
             profile_filter: self.profile.clone(),
+            ..BridgeOptions::default()
         }
     }
 }
