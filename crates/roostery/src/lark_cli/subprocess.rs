@@ -4,7 +4,7 @@ use crate::lark_cli::error::{LarkError, truncate_args, truncate_field};
 use crate::lark_cli::runner::{LarkRunner, RunOptions};
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -50,6 +50,14 @@ impl LarkCli {
     pub fn with_default_timeout(mut self, timeout: Duration) -> Self {
         self.default_timeout = timeout;
         self
+    }
+
+    /// Resolved binary path (honors `ROOSTERY_LARK_CLI_BIN` env override).
+    /// Exposed so streaming-wrapper callers (e.g., `bot_bridge::event::consume_im`)
+    /// that bypass the buffered `LarkRunner` trait can still share the same
+    /// binary resolution rule instead of falling back to a literal `"lark-cli"`.
+    pub fn binary(&self) -> &Path {
+        &self.binary
     }
 }
 

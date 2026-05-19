@@ -64,6 +64,10 @@ pub struct ConsumeOpts {
     pub backoff_reset_after: Duration,
     /// mpsc channel 容量。
     pub channel_buffer: usize,
+    /// 单行 NDJSON 最大字节数（防 lark-cli 异常吐出超长 / 无换行 partial 帧
+    /// 导致内存无限累积 / 流 stall）。超长行被丢弃 + warn，stream 不中断。
+    /// 默认 1 MiB——飞书 IM 单消息上限远小于此，正常 event 不会触发。
+    pub max_line_bytes: usize,
 }
 
 impl ConsumeOpts {
@@ -78,6 +82,7 @@ impl ConsumeOpts {
             max_backoff: Duration::from_secs(60),
             backoff_reset_after: Duration::from_secs(30),
             channel_buffer: 32,
+            max_line_bytes: 1024 * 1024,
         }
     }
 }
@@ -146,6 +151,23 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
                     let line_res = reader.next_line().await;
                     match line_res {
                         Ok(Some(line)) => {
+                            // Defense vs runaway producer: lark-cli accidentally
+                            // emitting a huge / no-newline frame would otherwise
+                            // grow next_line()'s internal String unbounded. Cap
+                            // here drops the offending line + warns; subsequent
+                            // well-formed lines continue normally. Note: this
+                            // bounds *post-arrival* damage; a single malicious
+                            // long line can still allocate up to max_line_bytes
+                            // before being dropped — full streaming cap is its
+                            // own larger refactor (see followup observation).
+                            if line.len() > opts.max_line_bytes {
+                                tracing::warn!(
+                                    line_bytes = line.len(),
+                                    max = opts.max_line_bytes,
+                                    "oversized NDJSON line dropped"
+                                );
+                                continue;
+                            }
                             let trimmed = line.trim();
                             if trimmed.is_empty() {
                                 continue;

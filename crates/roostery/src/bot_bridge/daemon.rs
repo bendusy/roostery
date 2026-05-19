@@ -278,10 +278,14 @@ pub async fn run_bridge(
         mpsc::channel::<(BotRole, Result<ImEvent, EventError>)>(opts.event_channel_buffer.max(1));
     let mut source_joins: JoinSet<()> = JoinSet::new();
 
+    // P2 fix (codex audit 2026-05-19): 复用 LarkCli 同源 binary 解析
+    // （含 `ROOSTERY_LARK_CLI_BIN` env override），而非 hardcode "lark-cli"
+    // 字面量——保证 streaming consume_im 子进程跟 buffered RPC 调用走同一
+    // 二进制路径。
     let lark_binary = opts
         .lark_binary
         .clone()
-        .unwrap_or_else(|| PathBuf::from("lark-cli"));
+        .unwrap_or_else(|| crate::lark_cli::subprocess::LarkCli::new().binary().to_path_buf());
     for bot in &filtered {
         let bot_clone = bot.clone();
         let tx = central_tx.clone();
@@ -291,23 +295,27 @@ pub async fn run_bridge(
         let stream_cancel = cancel.clone();
         source_joins.spawn(async move {
             let mut stream = consume_im(consume_opts);
-            loop {
+            let exit_reason: &'static str = loop {
                 tokio::select! {
                     biased;
-                    _ = stream_cancel.cancelled() => {
-                        drop(stream.rx);
-                        return;
-                    }
+                    _ = stream_cancel.cancelled() => break "cancelled",
                     item = stream.rx.recv() => match item {
                         Some(it) => {
                             if tx.send((bot_clone.clone(), it)).await.is_err() {
-                                return;
+                                break "central_tx_closed";
                             }
                         }
-                        None => return,
+                        None => break "stream_eof",
                     }
                 }
-            }
+            };
+            // P1 fix (codex audit 2026-05-19): drop rx + await inner join 让
+            // consume_im 后台 task 完整退出（含子进程 kill_on_drop 收尾），
+            // 而非源 task 一返回就留下 dangling lark-cli subscribe 子进程
+            // 直到 tokio runtime 退出。
+            drop(stream.rx);
+            let _ = stream.join.await;
+            tracing::debug!(exit_reason, "bot consume_im source task exited");
         });
     }
     drop(central_tx);
