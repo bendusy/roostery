@@ -480,9 +480,9 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 17. **`bot-bridge-cluster`** — bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router 合并实现
     - 所属模块：F
     - 依赖：`bot-stop-hook`
-    - 状态：planned
-    - 主要支持的 req：`agent-work-in-feishu`（协作 / HITL 路由扩展）
-    - 备注：Phase 5；这一组在 Python 版相互耦合较紧，Rust 版可借机重新拆分但**行为以文档为准**——目前文档对这一组的具体行为描述薄弱，本 feature 启动前可能需要 `cs-arch new` 把现状梳清（见 §7 观察项）
+    - 状态：**done**
+    - 主要支持的 req：`agent-work-in-feishu`（协作 / HITL 路由扩展，兑现用户故事第 4 条 IM 群里围观 / 接续 / 反向操控）
+    - 备注：**Phase 5 Module F 第 3 子 feature**。Rust 期 1 子目录 `crates/roostery/src/bot_bridge/`（9 文件 ~3 200 行 + 集成测 634 行）替代 Python 5 模块。**关键决策（design D1-D12，user approved 2026-05-19）**：(a) 5 Python 模块合并 1 Rust 子目录按职责切分；(b) HITL 信号通道走进程内 tokio oneshot channel **不落盘 sentinel**——Rust 期重新设计而非 Python 1:1 翻译的代表案例；(c) runner 调用走 `dispatcher::runners::Runner` trait + Registry 复用 Phase 4；(d) IM 事件源走 `lark-cli im_messages_subscribe` 子进程 NDJSON tail + 指数退避重连 cap 60s；(e) `ActiveRunnerRegistry` 命名避让 `dispatcher::runners::RunnerRegistry`；(f) `ADJUST_MAX = 1` const Python parity；(g) 每 BotRole 独立 cache 目录 `~/.roostery/state/bot_chats/{app_id}/`。**明确不做**：base_intent_router / `--parallel` flag / cleanup_orphans / 用户自定义 abort-adjust 关键词 / `relay_writer_app_id` 跨身份 profile 转向 / POSIX `os::kill` / SIGTERM。Accepted 2026-05-19（commits `3ccd2a3..dbd2470`，570 tests 全过，clippy/fmt 全绿）。新增公开承诺：`BOTS_SCHEMA_VERSION = 1` / `BOT_CHAT_CACHE_SCHEMA_VERSION = 1`。req `agent-work-in-feishu` status 保持 `current`（本 feature 兑现协作维度，加变更日志条目）
 
 ### Module G · Reporting
 

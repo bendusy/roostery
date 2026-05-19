@@ -2,7 +2,7 @@
 
 > 状态：active（Rust 重写期更新）
 > 创建日期：2026-05-15
-> 末次刷新：2026-05-19（post-0.1.0 rust-idiom audit + 4 commit 落地：dispatcher dead-code 清理 / process_one reject() helper 重构 / bot_stop_hook + onboarding 大文件 split 子目录 / FallbackCtx Parameter Object；rust-module-organization decision update §5 加 cross-link）
+> 末次刷新：2026-05-19（feature `bot-bridge-cluster` accepted——Module F 第 3 子 feature 落地：bot_bridge 9 子模块簇 + per-bot daemon + IM HITL oneshot 通道 + chat→task 接力缓存；新增 §5 决定 9 / §6 #20-22 / §2 7 条术语 / §3 Module F bot_bridge 段）
 
 ## 1. 项目简介
 
@@ -83,6 +83,13 @@
 | `paths::TEST_ENV_LOCK` | `crates/roostery/src/paths.rs:67` `pub static Mutex<()>`。**跨模块共享**的测试 env 串行化锁。所有 `#[test]` / `#[tokio::test]` 改 `ROOSTERY_*` / `HOSTNAME` / `FEISHU_*` 等进程级 env 必须先 lock 这把。修订原因：之前每 mod 在 `mod tests` 各自声明 ENV_LOCK，多 mod 并行跑触碰同 env var 时 race（一 mod lock 不能阻挡另一 mod set_var），任 test 因 race 失败 panic 还 poison 该 mod lock 连锁拖挂。**Corollary**：`fn` 内消费 `paths::roostery_home()` / `paths::journal_dir()` 等 env-dependent helper 的测试（如 config roundtrip）也要锁——`Config::default()` 里 `journal.dir = paths::journal_dir()` 会读 env 当前值。落定于 bot-stop-hook feature S10.5 |
 | `SAFE_ENV_FORWARD` | `runners.rs:36` 公开 `&[&'static str]` const allowlist。子进程 env 经此过滤——父 hook 状态（如 `ROOSTERY_AGENT`）**不串到子 agent**避 trace 链断裂。覆盖：POSIX baseline（USER/LOGNAME/SHELL/TMPDIR）+ XDG_* + 代理（HTTP_PROXY etc.）+ TLS CA + API keys（ANTHROPIC/OPENAI/GEMINI/GOOGLE）+ Custom base URLs + 各 vendor config dirs。私有 helper `prep_env(ctx, kind)` 合并 allowlist + POSIX 兜底（PATH/HOME/LANG/TERM）+ trace 三 env（`to_env_pairs()`）|
 | `DEFAULT_TIMEOUT_MS` / `STDOUT_HEAD_CAP` | `runners.rs:30-31` 公开 const，分别 `600_000` (10 min) / `4096` (4 KiB)。CcHeadless 默认 timeout + stdout/stderr 截断阈值 |
+| `BotRole` / `BotsConfig` / `BOTS_SCHEMA_VERSION` | Phase 5 落地的 `crates/roostery/src/bot_bridge/role.rs`（feature `2026-05-19-bot-bridge-cluster`）。`BotRole` `#[non_exhaustive]` 9 字段（app_id 双关 lark-cli profile / role 显示名 / mention_alias `@<alias>` 匹配键 / runner `Runner::kind()` 值 / default_cwd / prompt_template + reply_template / chat_whitelist 空=不限 / next_bot_mention 接力链下一棒）。`BotsConfig` `#[non_exhaustive] { schema_version, bots }`，schema_version 缺失走 `serde(default)` = 1（向后兼容）。`BotRoleError` `#[non_exhaustive]` 4 变体（LoadFailed / ParseFailed / SchemaVersionMismatch / MissingField{ index, field }）。`pub fn load_bots(&Path) -> Result<BotsConfig, BotRoleError>` 校验链：read → parse → schema_version 校验 → 必填字段存在性校验（先于 serde 报更友好错）→ 反序列化 |
+| `roostery bot bridge` 子命令 | `crates/roostery/src/bot_stop_hook/cli.rs:27 BotSub::Bridge(BridgeCliArgs)`（feature `2026-05-19-bot-bridge-cluster`）。第 3 个 `bot` 子命令（与 `stop-hook` / `push` 并列）；clap 5 flags：`--bots <PATH>` (default `~/.roostery/bots.yaml`) / `--profile <ID>`（可重复）/ `--max-concurrency <N>` (default 8) / `--max-events <N>` (0 = unlimited) / `--timeout <SEC>`。语义对称：push / stop-hook 是 single-shot，bridge 是 long-running daemon |
+| `HitlDecision` / `HitlSignal` / `ABORT_KEYWORDS` / `ADJUST_PREFIXES` | `crates/roostery/src/bot_bridge/{hitl,active_registry}.rs`（feature `2026-05-19-bot-bridge-cluster`）。`HitlDecision` `#[non_exhaustive]` 三态 `Abort{reason} / Adjust{body} / Pass`——`hitl::classify(&str) -> HitlDecision` 把 IM 消息正文判定为三态之一。`HitlSignal` `#[non_exhaustive]` 二态 `Abort{reason} / Adjust{body}`——只有需要 runner 立即响应的状态发到 oneshot channel，Pass 不发信号。`ABORT_KEYWORDS: &[&str]` = `&["/stop", "/abort", "停", "中止"]` 整段精确匹配；`ADJUST_PREFIXES: &[&str]` = `&["/adjust ", "/adjust\n", "调整 ", "调整\n"]` 前缀匹配，body 空 → Pass 退化。**const 写死不开放配置**（与 Python 一致） |
+| `ActiveRunnerRegistry` / `RunnerHandle` | `crates/roostery/src/bot_bridge/active_registry.rs`（feature `2026-05-19-bot-bridge-cluster`）。**进程内活跃 runner 表**——`Mutex<BTreeMap<TaskGuid, RunnerHandle>>` 记录"当前哪条 task 由哪个子进程跑"。`RunnerHandle { kill_tx: tokio::sync::oneshot::Sender<HitlSignal>, task_guid, task_url, chat_id, started_at }`。**与 `dispatcher::runners::RunnerRegistry` 同名不同概念**——后者是"哪些 runner kind 可用"（trait 注册表，全局静态），前者是"哪些活跃 task 在跑"（实例表，daemon 重启清零）。命名前缀 `Active` 避让；长期重构待 cs-refactor 把 dispatcher 那个改 `RunnerKindRegistry`（design D2）。`send_signal(guid, sig)` 实装是 remove-on-send pattern（oneshot::Sender 消费 self）|
+| `BOT_CHAT_CACHE_SCHEMA_VERSION` / `EndOutcome` / `RelayTaskError` | `crates/roostery/src/bot_bridge/relay_task.rs`（feature `2026-05-19-bot-bridge-cluster`）。const `= 1` 公开承诺；`~/.roostery/state/bot_chats/{app_id}/{safe_chat}.json` schema 字段变更需 bump + 兼容旧版反序列化。`EndOutcome` `#[non_exhaustive]` 四态 `Success{adjust_attempts} / Failed{exit_code} / Aborted{reason} / Timeout`，对应 step 文案 ✅ / ❌ / ⚠️ / ⏱️ emoji 前缀。`RelayTaskError` `#[non_exhaustive]` 3 变体（TaskWriter / CacheLoad / CacheSave）。3 pub async fn `record_start / record_adjust / record_end`，按 chat_id 索引 cache：cache hit 复用 TaskRef + append step，cache miss 调 `bot_task_writer::create_task` + 写 cache。`record_adjust` 入参含 `chat_id` 让 cache.adjust_count 真实递增（design 实装阶段 commit `e5d9366` 修） |
+| `BridgeOptions` / `BridgeReport` / `ShutdownReason` / `CancelToken` | `crates/roostery/src/bot_bridge/daemon.rs`（feature `2026-05-19-bot-bridge-cluster`）。`BridgeOptions` 12 字段（max_concurrency / max_events / timeout / profile_filter / event_channel_buffer / shutdown_deadline / lark_binary / journal_dir / runner_registry / lark_runner / cancel 注入点）——daemon 启动 + 测试可观察性扩展；多数注入点可走 `None = default` 让生产路径走默认实装。`BridgeReport` 11 字段聚合（events_received / events_skipped_unmatched_chat / events_skipped_no_match / hitl_abort_signaled / hitl_adjust_signaled / hitl_signal_misses / handle_event_spawned / handle_event_results map / event_source_errors / bots_subscribed / shutdown_reason）。`ShutdownReason` `#[non_exhaustive]` 5 态（CtrlC / MaxEvents / MaxDuration / EventSourceClosed / NoBots）。`CancelToken { flag: AtomicBool, notify: Notify }` 进程内取消令牌——daemon 接受外部注入实现 ctrl_c 之外的程序化 cancel（仓库无 tokio-util，手撸 Arc<AtomicBool>+Notify 即足）|
+| `bot_bridge` 子目录模块图 | `crates/roostery/src/bot_bridge/`（feature `2026-05-19-bot-bridge-cluster`）9 个子模块：`role` / `hitl` / `active_registry` / `relay_task` / `event` / `runner` / `daemon` / `cli` / `mod.rs`。**编排链**：daemon spawn per-bot consume_im → 中央 mpsc → main loop classify HITL → 命中 lookup+send_signal / 未命中 event_matches_bot → spawn handle_event → record_start → register active + select! { runner_future, kill_signal } → Adjust 重启循环 / Abort / 自然终态 → unregister + record_end → reply（通过 LarkRunner）。**journal source 命名空间** `bot_bridge:daemon` / `bot_bridge:handle_event`——daemon 主循环编排副作用 vs handle_event 协程内副作用分两个 source；下游 query 可按 source 过滤拿到 daemon 流水 |
 
 ### State ownership
 
@@ -276,7 +283,7 @@ bootstrap `~/.roostery/`（自 journal-core 起；env 覆盖走 `ROOSTERY_HOME`�
 
 ### Module F · Bot Bridge（Phase 5）
 agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feishu` req 的直接兑现层**。`bot-stop-hook` feature 完成 = "Rust 可用" milestone = **0.1.0 触发判据达成**（2026-05-18，feature `2026-05-18-bot-stop-hook` 合入 commit `220c7b0`，CI run `26030808131` 全绿）。
-- 子 feature：**`bot-task-writer`（done）** / **`bot-stop-hook`（done）** / `bot-bridge-cluster`
+- 子 feature：**`bot-task-writer`（done）** / **`bot-stop-hook`（done）** / **`bot-bridge-cluster`（done，2026-05-19）**
 
 **bot_task_writer 模块**（已落地，feature `2026-05-18-bot-task-writer`，Phase 5 第 1 子 feature）：
 
@@ -311,6 +318,41 @@ agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feis
   - **summary 截断 UTF-8 边界安全**：`truncate_utf8` 用 `is_char_boundary` 不切坏多字节字符（Python `head -c 200` 在中文 / emoji 上会切坏）
 - **极简 sh wrapper 切换**（`templates/agent_stop_notify.sh` 47 行 → 10 行 + 0 jq/tac）：从"sh 用 jq 抽 cwd / session / transcript / tail + 调 `roostery dispatcher fire`"退化为"stdin 直透 `roostery bot stop-hook`"，Rust 端原生处理。旧用户重跑 `roostery init` 自然升级（include_str! 编译期嵌入 + hooks_merge 幂等覆盖）
 - **与 dispatcher 的关系**：bot_stop_hook 与 dispatcher 是**两个独立顶层 CLI 入口**，不互调（架构红线 D14）。dispatcher 是通用 rule 引擎（HookEvent / budget / trace），bot push/stop-hook 是飞书 task 快通道（PushRequest / IM 兜底）。未来若需统一可新开 feature 加 `BotPushRunner` 适配器，不阻塞 0.1.0
+
+**bot_bridge 模块簇**（已落地，feature `2026-05-19-bot-bridge-cluster`，Phase 5 第 3 子 feature）：
+
+- **长跑 daemon `roostery bot bridge`**：订阅 IM event → 路由匹配 @mention 的消息 → 调 Runner 实例跑 → 写飞书 task step 流 → IM thread 回复；群里 `/stop` `/abort` `停` `中止` 中止正在跑的 runner，`/adjust <body>` 带追加 prompt 重启 runner（上限 `ADJUST_MAX = 1` Python parity）
+- **5 Python 模块（bot_role / bot_runner / bot_bridge / bot_relay_task / hitl_router）→ 1 Rust 子目录** `crates/roostery/src/bot_bridge/`，9 文件按职责切分（D1）：
+  - `role.rs`            BotRole + BotsConfig + load_bots + event_matches_bot + extract_message_body
+  - `hitl.rs`            HitlDecision 三态分类 + ABORT_KEYWORDS / ADJUST_PREFIXES const 写死
+  - `active_registry.rs` ActiveRunnerRegistry 进程内活跃 runner 表 + oneshot HitlSignal 通道
+  - `relay_task.rs`      chat_id → TaskRef 缓存 + EndOutcome 四态 step 文案 + record_start/adjust/end
+  - `event.rs`           ImEvent + consume_im（lark-cli `im_messages_subscribe` 子进程 NDJSON tail + 指数退避重连 cap 60s）
+  - `runner.rs`          handle_event 编排（select! runner_future vs kill_signal + Adjust 重启循环）
+  - `daemon.rs`          run_bridge 主循环（per-bot consume_im → 中央 mpsc → HITL 串行分流 → spawn handle_event → graceful shutdown）
+  - `cli.rs`             BridgeCliArgs 5 flags（bots / profile / max_concurrency / max_events / timeout）
+- **关键架构选择**：
+  - **HITL 信号通道走进程内 `tokio::sync::oneshot::Sender<HitlSignal>` 不落盘 sentinel**（design D3）——Python 期 `~/.feishu_hub/state/runner_registry/{task_guid}/abort.txt` 文件通信是"runner 跨 process"的副产品；Rust 期 runner 与 bridge 同 tokio runtime，oneshot 是 idiom，消除 race window
+  - **runner 调用必经 `dispatcher::runners::Runner` trait + Registry**（design D4）——`BotRole.runner` 字段值 = `Runner::kind()`；Phase 4 已落 `NoopRunner` / `CcHeadlessRunner`，未来加 codex_exec / gemini_headless 无需改 bot_bridge
+  - **task 写入复用 `bot_task_writer` 公开 API**（design D5）——不直接调 LarkRunner 创 task；继承 `append_steps --yes` 架构红线显式破例（§6 #18）
+  - **per BotRole 独立 cache 目录** `~/.roostery/state/bot_chats/<safe(bot_app_id)>/`（design D10）——与 `session_tasks/` 平级兄弟目录，由 `paths::bot_chat_cache_dir()` 解析；chat_id 文件名层 safe_filename 防路径跳出
+  - **HITL 判定必须串行先于 spawn handle_event**（design §2.2 流程级约束）——daemon 中央 dispatcher loop 收 mpsc 时先 `classify` 命中 abort/adjust 直接走 `active_registry.send_signal` 不 spawn；否则 `/stop` 可能错过新启动的 runner
+  - **`ActiveRunnerRegistry` 命名避让 `dispatcher::runners::RunnerRegistry`**（design D2）——后者是 "runner kind 注册表"，前者是 "活跃 task 实例表"；长期重构待 `cs-refactor` 把 dispatcher 那个改 `RunnerKindRegistry`
+- **明确不做**（design §3 反向核对项）：
+  - 不引用 Base / base_intent_router（Phase 7 base-indexer 落地后再起独立 feature 评估）
+  - 不沿用 Python `--parallel` flag（Rust 默认 tokio spawn per event；`--max-concurrency N` 控并发）
+  - 不实现 `cleanup_orphans`（ActiveRunnerRegistry 是进程内内存表，daemon 重启天然清零）
+  - 不引 user-customizable abort / adjust 关键词（const 写死）
+  - 不沿用 `relay_writer_app_id` 跨 bot 共享 task（推后；本期每 bot 独立 chat→task 缓存）
+  - 不沿用 POSIX `os::kill` / SIGTERM / SIGKILL（走 tokio oneshot channel）
+- **journal source / action 命名空间** `bot_bridge:*`：
+  - `bot_bridge:daemon` —— daemon main loop + dispatch_hitl_{abort,adjust} 副作用
+  - `bot_bridge:handle_event` —— event:received / event:skipped / event:hitl_adjust / event:handle_complete
+- **跨模块边界**：
+  - 飞书 IO 必经 `LarkRunner` trait（红线 #1）；唯一例外是 `event.rs` 的 IM streaming subscribe 走 `tokio::process::Command::new(&opts.binary)` 注入二进制路径（NDJSON tail 是长跑流式模型，与 buffered Value LarkRunner 不兼容；变量名而非字面量 `"lark-cli"`）
+  - `~/.roostery/state/bot_chats/{app_id}/{safe_chat}.json` 仅是缓存（红线 #2），丢失重建即可——任务状态查询永远走飞书
+  - 0 LLM client import（红线 #3）；runner 调用走 dispatcher::runners 已有实装
+- 引用相关 decisions：`.codestable/compound/2026-05-19-decision-runtime-launch-strategy.md`（tmux default over ACP / direct spawn）、`.codestable/compound/2026-05-18-decision-cli-subcommand-module-layout.md`（cli.rs per-module convention）、`.codestable/compound/2026-05-16-decision-rust-module-organization.md`（500+ 行升档 2 子目录约定，本 feature 9 文件落实）
 
 ### Module G · Reporting（Phase 6）
 日报：git log 聚合 + LLM 摘要 + 写飞书 docx + Base 记录。`llm_summary` 是**唯一**允许 import 外部 LLM client 的模块（架构红线）。Cargo feature flag 控制。
@@ -352,6 +394,7 @@ Feishu Base 作为索引层（**非** source of truth）。
    - **`LarkRunner`**：buffered Value 模型 + tokio（`wait_with_output` 一次性 collect + `serde_json::Value` parse；调用结果返给 caller）
 
    三条路径 I/O 语义根本不同（streaming/raw bytes 检文本 vs buffered Value parse JSON），所以**不强行抽公共 trait**；只共享下层 `journal` / `redact` / `remoterefs` / `paths` 模块。下游 read/replay 通过 `JournalEntry.source` 字段（"shim" / "dispatcher" / ...）+ `~/.roostery/state/smoke.json` 状态文件分流
+9. **多 bot daemon + IM HITL 反向控制走进程内 tokio oneshot channel**（自 feature `2026-05-19-bot-bridge-cluster` 落地起）：`bot_bridge::active_registry::ActiveRunnerRegistry` 用 `BTreeMap<TaskGuid, RunnerHandle>` 内存表 + `tokio::sync::oneshot::Sender<HitlSignal>` 给运行中 runner 发 abort / adjust 信号；**不落盘 sentinel 文件**——与 Python 期 `~/.feishu_hub/state/runner_registry/{task_guid}/abort.txt` 跨 process 文件通信对比，Rust 期 runner 与 bridge 在同 tokio runtime 下，oneshot 是 idiom，消除文件 race window 与 ~80 行落盘清理代码。**与 Python 1:1 翻译的偏离代表案例**——印证 "代码-文档优先级"（attention.md）：Python 是 prior baseline 不是应有形态，Rust port 不机械翻译。daemon 重启 ActiveRunnerRegistry 天然清零（不存在 cleanup_orphans 需求）。多 bot daemon 用中央 mpsc 把 per-bot consume_im 流合并到单一 dispatcher loop，**HITL classify 串行先于 spawn handle_event** 是保证 `/stop` 不被并发新 runner 抢先排队的核心顺序约束
 
 ## 6. 已知约束 / 硬边界
 
@@ -377,3 +420,6 @@ Feishu Base 作为索引层（**非** source of truth）。
 17. **`dispatcher.rs` 不直接走飞书 IO + 不直接 spawn**（自 feature `2026-05-18-dispatcher-loop` 落地起）：dispatcher 只做编排——飞书 IO 责任在具体 Runner impl 内部（如 CcHeadless 调 `claude` binary）或后续 Phase 5 `bot-task-writer` feature；子进程 spawn 责任在 Runner impl。`dispatcher.rs` grep `LarkRunner|lark_cli::|reqwest|Command::new|std::process::Command|tokio::process` 必须 0 命中（doc 注释中的 disclaimer 不算）
 18. **`bot_task_writer::append_steps` `--yes` 是 lark-shared 红线显式破例**（自 feature `2026-05-18-bot-task-writer` 落地起）：lark-shared SKILL 红线规定"未经用户同意不加 `--yes`"，本处是 sanctioned 例外——bot 写自己创建的 task 等价 agent 内部行为（append-only step stream，对用户资源无破坏性影响）。**理由链**：(a) `task.agent_task_step_info.append_task_steps` 在 lark-cli 标为 high-risk-write，缺 `--yes` 会 exit 10 `confirmation_required`；(b) 写入对象是 bot 自己 create 的 task（user-created task 写 step 会 10403），所以 bot 写自己的 step ≠ 写用户资源；(c) Python 版 POC 已验证；(d) Rust 版模块顶部 doc + design §1.2 D4 明示。**未来加新破例必须先 update 本节** + 模块顶部 doc 双签
 19. **`ROOSTERY_LARK_CLI_BIN` env 双语义复用**（自 feature `2026-05-18-init-real-lark-cli-override` 落地起）：同一 env 在 **runtime** 与 **init time** 双场景下被读取——runtime 决定 `LarkCli` subprocess 调什么二进制（`lark_cli/subprocess.rs:14`），init time 决定写到 `~/.roostery/env` 的 `ROOSTERY_REAL_LARK_CLI` 是什么（`onboarding.rs::resolve_real_lark_cli` 三层链第 2 层）。两者在用户视角一致（"我的 lark-cli 在这里"），但**红线**：env 永远不该被设成 shim 自身路径（`~/.local/bin/lark-cli`），否则 shim 自递归 forward 死循环。本 feature 不防御 self-loop（design §1.3 明确不做，记观察项 O2）；后续若有 user 撞到走 cs-issue 开 self-check 改进 feature。**与现有红线 #1（`lark-cli` 唯一飞书入口）+ #10（`ROOSTERY_REAL_LARK_CLI` 持久化路径）配套**——一个 env 串起 runtime / init / shim forward 三个层面，确保 single source of truth
+20. **`BOTS_SCHEMA_VERSION = 1` 公开承诺**（自 feature `2026-05-19-bot-bridge-cluster` 落地起）：`~/.roostery/bots.yaml` 顶层 `schema_version: 1` 是用户编辑的配置 schema 承诺；字段名 / 类型 / 序列化形态变更需 bump version + `cs-roadmap update` 评估 + 旧版兼容反序列化。schema_version 缺失走 `serde(default)` = 1（向后兼容）；显式 != 1 → `BotRoleError::SchemaVersionMismatch`。const 定义 `crates/roostery/src/bot_bridge/role.rs:17`。同 `JournalEntry` / `Config` / `BudgetState` / `HookEvent` / `SESSION_CACHE_SCHEMA_VERSION` 模型
+21. **`BOT_CHAT_CACHE_SCHEMA_VERSION = 1` 公开承诺**（自 feature `2026-05-19-bot-bridge-cluster` 落地起）：`~/.roostery/state/bot_chats/{app_id}/{safe_chat}.json` schema 字段名 / 类型 / 序列化形态变更需 bump version + `cs-roadmap update` 评估 + 旧版兼容反序列化（缺失走 serde default 0 → 视为 1）。const 定义 `crates/roostery/src/bot_bridge/relay_task.rs:31`
+22. **`bot bridge` daemon 不感知 Base / base_intent**（自 feature `2026-05-19-bot-bridge-cluster` 落地起）：`bot_bridge::daemon::run_bridge` 主循环只做 IM event → @mention 路由 → runner → 回复，**不解释 base_intent / `/run <base_ref>` 路由**（Python 期 `bot_bridge._try_base_intent` 是 M4.D 与 Base 模块的耦合）。Rust 期 Base 在 Phase 7 落地后是否在 bridge 加 base intent 钩子由独立 feature 评估，不在本 feature 范畴。**与 dispatcher / bot push 三条独立顶层 CLI 入口语义并列**——三者不互调（dispatcher = 通用 rule 引擎；bot push/stop-hook = 飞书 task 快通道；bot bridge = IM 长跑 daemon），未来若需统一可起 cs-refactor

@@ -37,124 +37,124 @@ steps:
 checks:
   - item: "BotsConfig + BotRole + BOTS_SCHEMA_VERSION=1 公开承诺 + 4 错误变体到位"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "HitlDecision 三态 + ABORT_KEYWORDS / ADJUST_PREFIXES const 列表"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "ActiveRunnerRegistry + RunnerHandle + HitlSignal oneshot channel"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "EndOutcome 四态（Success/Failed/Aborted/Timeout）+ relay_task 三 fn 签名"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "BridgeOptions + BridgeReport + run_bridge 主入口签名"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "ImEvent + consume_im stream API"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "BridgeCliArgs clap 5 flags + bot 顶层子命令注册 Bridge 变体"
     source: 挂载点
-    status: pending
+    status: passed
   - item: "~/.roostery/bots.yaml 文档化 schema（schema_version 顶层 + bots 数组）"
     source: 挂载点
-    status: pending
+    status: passed
   - item: "paths::bot_chat_cache_dir(bot_app_id) helper 新增"
     source: 挂载点
-    status: pending
+    status: passed
   - item: "journal source/action 命名空间 bot_bridge:* 约定"
     source: 挂载点
-    status: pending
+    status: passed
   - item: "主流程：consume_im → HITL classify → 命中 lookup+oneshot / 未命中 event_matches_bot → handle_event spawn → register → select runner_result vs kill_signal → Adjust 重启循环 → record_end → reply → unregister"
     source: 编排骨架
-    status: pending
+    status: passed
   - item: "HITL 判定必须串行先于 spawn handle_event（保 /stop 不被并发 handle_event 抢先）"
     source: 流程级约束
-    status: pending
+    status: passed
   - item: "幂等性：append_steps idempotency_key = relay:{kind}:{message_id}:{bot_app_id}"
     source: 流程级约束
-    status: pending
+    status: passed
   - item: "lark-cli subscribe 子进程意外退出 → 指数退避重连，cap 60s；daemon 不退"
     source: 流程级约束
-    status: pending
+    status: passed
   - item: "graceful shutdown：tokio::signal::ctrl_c → 关 mpsc → 等 active 协程 deadline → 关子进程"
     source: 流程级约束
-    status: pending
+    status: passed
   - item: "不实现 base_intent / base_intent_router 路由"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "不沿用 Python --parallel flag / threading model（Rust 走 tokio spawn 默认并发）"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "不实现 cleanup_orphans（进程内 ActiveRunnerRegistry 不落盘）"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "不引入 user-customizable abort / adjust 关键词（const 写死）"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "不沿用 relay_writer_app_id 跨身份 profile 转向"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "不沿用 POSIX os::kill / SIGTERM / SIGKILL（走 tokio oneshot channel）"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "N1：单 bot 单次 @ → 飞书出 task + step 流 + thread reply 含 task URL"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "N2：同 chat 连续 @ → 同一 TaskGuid 接力 step"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "N3：--max-events 5 处理完正常退出 + BridgeReport 输出"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "N4：多 bot 各自缓存目录隔离"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "B1：U+0020 / U+00A0 / U+3000 三种 mention 空格分隔都识别"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "B2：schema_version 缺失=1 / =2 SchemaVersionMismatch"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "B3：MissingField 含 index + field 名"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "B4：chat_whitelist 命中过滤"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "B5：/adjust 触上限 ADJUST_MAX 后转 aborted"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "B6：/stop 触 oneshot 中止 + step ⚠️ 反向 reply"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "E1：subscribe 子进程退出指数退避重连"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "E2：create_task 失败不阻塞 runner 主路径"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "E3：runner kind 不存在 → Skipped + 友好 reply"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "E4：handle_event 协程 panic 隔离不影响 daemon"
     source: 验收场景
-    status: pending
+    status: passed
   - item: "G1：bot_bridge/ 内 0 reqwest / Command::new(\"lark-cli\") / Command::new(\"claude\")"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "G2：bot_bridge/ 内 0 FEISHU_HUB_*"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "G3：bot_bridge/ 内 0 os::unix / signal::SIGTERM / signal::SIGKILL / nix::"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "G4：bot_bridge/ 内 0 base_config / base_indexer / base_intent_router"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "G5：clap subcommand tree 不出现 --parallel"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "G6：bot_bridge/ 内 0 relay_writer_app_id"
     source: 范围守护
-    status: pending
+    status: passed
