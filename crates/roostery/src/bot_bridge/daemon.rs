@@ -23,11 +23,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::json;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::bot_bridge::active_registry::{ActiveRunnerRegistry, HitlSignal};
@@ -58,43 +57,9 @@ pub enum ShutdownReason {
     NoBots,
 }
 
-/// 进程内可取消令牌：daemon 接受外部注入 → CLI 入口在 ctrl_c handler 内 cancel。
-///
-/// 设计选择 A（仓库无 tokio-util，手撸 `Arc<AtomicBool>` + `Notify` 即足）。
-#[derive(Debug, Default)]
-pub struct CancelToken {
-    flag: AtomicBool,
-    notify: Notify,
-}
-
-impl CancelToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    pub fn cancel(&self) {
-        if !self.flag.swap(true, Ordering::SeqCst) {
-            self.notify.notify_waiters();
-        }
-    }
-    pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
-    }
-    pub async fn cancelled(&self) {
-        if self.is_cancelled() {
-            return;
-        }
-        loop {
-            let waited = self.notify.notified();
-            if self.is_cancelled() {
-                return;
-            }
-            waited.await;
-            if self.is_cancelled() {
-                return;
-            }
-        }
-    }
-}
+// CancelToken 提取到 `bot_bridge::cancel`（codex round-8 P1 修复：consume_im
+// 也要接收同一 token），通过 `pub use` 在本模块保持调用方兼容。
+pub use super::cancel::CancelToken;
 
 /// daemon 启动参数集合（design §2.1 + 测试可观察性扩展）。
 pub struct BridgeOptions {
@@ -292,6 +257,10 @@ pub async fn run_bridge(
         let mut consume_opts = ConsumeOpts::new(lark_binary.clone(), bot.app_id.clone());
         consume_opts.max_events = opts.max_events;
         consume_opts.timeout = opts.timeout;
+        // codex round-8 P1: 把 cancel 注入 consume_im 内部，让 read /
+        // backoff sleep 都响应 shutdown，避免 await stream.join 卡到
+        // shutdown_deadline。
+        consume_opts.cancel = Some(cancel.clone());
         let stream_cancel = cancel.clone();
         source_joins.spawn(async move {
             let mut stream = consume_im(consume_opts);

@@ -14,6 +14,7 @@
 //! `cli` 是挂载点适配层（compound `2026-05-18-decision-cli-subcommand-module-layout.md`）。
 
 pub mod active_registry;
+pub mod cancel;
 pub mod cli;
 pub mod daemon;
 pub mod event;
@@ -22,4 +23,5 @@ pub mod relay_task;
 pub mod role;
 pub mod runner;
 
+pub use cancel::CancelToken;
 pub use daemon::{BridgeError, BridgeOptions, BridgeReport, run_bridge};

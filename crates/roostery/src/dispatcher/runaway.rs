@@ -69,7 +69,11 @@ impl RunawayTracker {
     /// window after this one is added. Lazily evicts older entries.
     pub fn record(&mut self, trace_id: &TraceId) -> u32 {
         let now = (self.clock)();
-        let cutoff = now.checked_sub(self.window).unwrap_or(now);
+        // codex round-8 P2 fix: `now.checked_sub(window)` 在 daemon 启动后
+        // 早期（now < window，常见于刚启动后几分钟）会下溢——之前 fallback
+        // 用 `now` 当 cutoff 会**误清掉**所有更早的合法 entry。改为
+        // Option<Instant>：None = "窗口未满，什么都不过期"，跳过 retain。
+        let cutoff = now.checked_sub(self.window);
         // 周期性扫除"完全过期 bucket"——见 PRUNE_EVERY 文档。
         self.record_count_since_prune = self.record_count_since_prune.saturating_add(1);
         if self.record_count_since_prune >= PRUNE_EVERY {
@@ -77,7 +81,9 @@ impl RunawayTracker {
             self.record_count_since_prune = 0;
         }
         let bucket = self.fires.entry(trace_id.clone()).or_default();
-        bucket.retain(|ts| *ts >= cutoff);
+        if let Some(c) = cutoff {
+            bucket.retain(|ts| *ts >= c);
+        }
         bucket.push(now);
         bucket.len() as u32
     }
@@ -86,13 +92,17 @@ impl RunawayTracker {
     /// 依赖 `record()` 内的周期清扫。返清扫掉的 bucket 数（含部分清掉的）。
     pub fn prune(&mut self) -> usize {
         let now = (self.clock)();
-        let cutoff = now.checked_sub(self.window).unwrap_or(now);
+        let cutoff = now.checked_sub(self.window);
         self.prune_expired(cutoff)
     }
 
     /// 内部清扫：从每个 bucket 内剔除过期 Instant，整个 bucket 都过期则
-    /// 整条移除。返清扫的 bucket 数。
-    fn prune_expired(&mut self, cutoff: Instant) -> usize {
+    /// 整条移除。返清扫的 bucket 数。`cutoff = None` 表示窗口未满，直接
+    /// noop（不清任何 entry）。
+    fn prune_expired(&mut self, cutoff: Option<Instant>) -> usize {
+        let Some(cutoff) = cutoff else {
+            return 0;
+        };
         let before = self.fires.len();
         self.fires.retain(|_, v| {
             v.retain(|ts| *ts >= cutoff);

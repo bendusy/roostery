@@ -69,6 +69,10 @@ pub struct ConsumeOpts {
     /// 导致内存无限累积 / 流 stall）。超长行被丢弃 + warn，stream 不中断。
     /// 默认 1 MiB——飞书 IM 单消息上限远小于此，正常 event 不会触发。
     pub max_line_bytes: usize,
+    /// codex round-8 P1 修复：可选 cancel token，让 consume_im 在 read /
+    /// backoff sleep 中响应 daemon shutdown。None = 仅靠 mpsc 关闭驱动退出
+    /// （旧行为）。
+    pub cancel: Option<Arc<crate::bot_bridge::cancel::CancelToken>>,
 }
 
 impl ConsumeOpts {
@@ -84,7 +88,17 @@ impl ConsumeOpts {
             backoff_reset_after: Duration::from_secs(30),
             channel_buffer: 32,
             max_line_bytes: 1024 * 1024,
+            cancel: None,
         }
+    }
+
+    /// Builder: 注入 cancel token，让 consume_im 响应 graceful shutdown。
+    pub fn with_cancel(
+        mut self,
+        cancel: Arc<crate::bot_bridge::cancel::CancelToken>,
+    ) -> Self {
+        self.cancel = Some(cancel);
+        self
     }
 }
 
@@ -136,6 +150,13 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
     let mut events_emitted: usize = 0;
 
     loop {
+        // cancel 检查（codex round-8 P1 修复）：daemon shutdown 时立即返回，
+        // 不再进入下一次 spawn / read 循环。
+        if let Some(c) = &opts.cancel
+            && c.is_cancelled()
+        {
+            return;
+        }
         // 总超时检查
         if let Some(total) = opts.timeout
             && started.elapsed() >= total
@@ -149,7 +170,21 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
             Ok((mut child, stdout, stderr_tail)) => {
                 let mut reader = BufReader::new(stdout).lines();
                 loop {
-                    let line_res = reader.next_line().await;
+                    // codex round-8 P1: read 路径加 cancel 分支；biased 优先
+                    // 让 shutdown 立即响应。next_line future drop 时底层 buf
+                    // 不影响——下次 spawn 重建 reader。
+                    let line_res = if let Some(c) = &opts.cancel {
+                        tokio::select! {
+                            biased;
+                            _ = c.cancelled() => {
+                                let _ = child.kill().await;
+                                return;
+                            }
+                            line = reader.next_line() => line,
+                        }
+                    } else {
+                        reader.next_line().await
+                    };
                     match line_res {
                         Ok(Some(line)) => {
                             // Defense vs runaway producer: lark-cli accidentally
@@ -245,8 +280,17 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
             }
         }
 
-        // 退避后重连
-        tokio::time::sleep(backoff).await;
+        // 退避后重连。codex round-8 P1: backoff sleep 也要支持 cancel——
+        // shutdown 时不再等满 backoff，立即返回。
+        if let Some(c) = &opts.cancel {
+            tokio::select! {
+                biased;
+                _ = c.cancelled() => return,
+                _ = tokio::time::sleep(backoff) => {}
+            }
+        } else {
+            tokio::time::sleep(backoff).await;
+        }
         backoff = (backoff.saturating_mul(2)).min(opts.max_backoff);
     }
 }
