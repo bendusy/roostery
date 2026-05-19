@@ -177,7 +177,7 @@ pub async fn handle_event(
     let mut adjust_attempts: u32 = 0;
     let outcome: HandleOutcome = loop {
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel::<HitlSignal>();
-        active.register(RunnerHandle {
+        let run_id = active.register(RunnerHandle {
             kill_tx,
             task_guid: task_guid.clone(),
             task_url: task_url.clone(),
@@ -201,7 +201,7 @@ pub async fn handle_event(
             res = &mut runner_future => {
                 // runner 自然完成；active_registry 把 handle 留在表里
                 // （send_signal 是 remove-on-send，runner 自然完成路径需自行 unregister）。
-                let _ = active.unregister(&task_guid);
+                let _ = active.unregister(run_id);
                 break map_runner_result(res, adjust_attempts);
             }
         };
@@ -770,7 +770,7 @@ mod tests {
         let guid = guid_opt.expect("active handle should be registered");
         active
             .send_signal(
-                &guid,
+                guid,
                 HitlSignal::Abort {
                     reason: "/stop".into(),
                 },
@@ -826,7 +826,7 @@ mod tests {
             .expect("first register");
         active
             .send_signal(
-                &guid,
+                guid,
                 HitlSignal::Adjust {
                     body: "use sqlite".into(),
                 },
@@ -890,7 +890,7 @@ mod tests {
             .expect("first register");
         active
             .send_signal(
-                &guid1,
+                guid1,
                 HitlSignal::Adjust {
                     body: "first adjust".into(),
                 },
@@ -903,7 +903,7 @@ mod tests {
             .expect("second register");
         active
             .send_signal(
-                &guid2,
+                guid2,
                 HitlSignal::Adjust {
                     body: "second adjust".into(),
                 },
@@ -928,11 +928,11 @@ mod tests {
         active: &ActiveRunnerRegistry,
         chat_id: &str,
         timeout: Duration,
-    ) -> Option<TaskGuid> {
+    ) -> Option<crate::bot_bridge::active_registry::RunId> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
-            if let Some(g) = active.lookup_by_chat_id(chat_id) {
-                return Some(g);
+            if let Some(id) = active.lookup_by_chat_id(chat_id) {
+                return Some(id);
             }
             if std::time::Instant::now() >= deadline {
                 return None;

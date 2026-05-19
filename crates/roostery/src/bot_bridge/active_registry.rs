@@ -12,10 +12,34 @@
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 
 use crate::bot_task_writer::TaskGuid;
+
+/// 进程内 runner 实例唯一 id（codex round-7 P1-2 修复）。
+///
+/// 每次 `register` 拿一个新的 RunId 作为主键，避免 `TaskGuid` 在 relay_task
+/// cache hit 场景下（同 chat 多次 record_start 复用同一 TaskGuid）多个并发
+/// `handle_event` 注册时 BTreeMap 互相 overwrite —— 之前那条 race 会让
+/// 前一个 runner 的 `kill_tx` 被 drop，runner 错误退出。
+///
+/// 来源是进程内 `AtomicU64` 单调计数器，进程重启 reset；HITL 信号不跨进程。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RunId(u64);
+
+impl RunId {
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
+
+impl std::fmt::Display for RunId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "run{}", self.0)
+    }
+}
 
 /// 传给运行中 runner 的 HITL 动作信号（design §2.1）。
 ///
@@ -57,24 +81,27 @@ impl std::fmt::Debug for RunnerHandle {
 /// 发送 HITL 信号时的错误（design §2.1 `Result<(), HitlSignalError>`）。
 ///
 /// 两种实际可能：
-/// - `NotFound`     ：guid 在表中不存在（task 已结束 / 未 register）
+/// - `NotFound`     ：run_id 在表中不存在（task 已结束 / 未 register）
 /// - `ReceiverGone` ：oneshot::Sender::send 失败（runner 已 drop receiver，等价 runner 自然结束）
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum HitlSignalError {
-    #[error("no active runner for task_guid={0}")]
-    NotFound(TaskGuid),
-    #[error("runner receiver already dropped for task_guid={0}")]
-    ReceiverGone(TaskGuid),
+    #[error("no active runner for run_id={0}")]
+    NotFound(RunId),
+    #[error("runner receiver already dropped for run_id={0}")]
+    ReceiverGone(RunId),
 }
 
 /// 活跃 runner 表（design §2.1）。
 ///
-/// 内部用 `Mutex<BTreeMap<TaskGuid, RunnerHandle>>`——BTreeMap 选自 design 显式标注，
-/// 也方便 `lookup_by_chat_id` 按确定性顺序遍历（同 chat 多 task 时取第一个）。
+/// 内部 `Mutex<BTreeMap<RunId, RunnerHandle>>`——RunId 由 `next_id` 单调发放
+/// 保证多个并发 `handle_event` 即便 TaskGuid 重复（cache hit 场景）也不互相
+/// overwrite。`lookup_by_chat_id` 仍按 BTreeMap 顺序遍历（RunId 单增→最早
+/// 注册的 run 在前）。
 #[derive(Debug, Default)]
 pub struct ActiveRunnerRegistry {
-    inner: Mutex<BTreeMap<TaskGuid, RunnerHandle>>,
+    inner: Mutex<BTreeMap<RunId, RunnerHandle>>,
+    next_id: AtomicU64,
 }
 
 impl ActiveRunnerRegistry {
@@ -82,29 +109,34 @@ impl ActiveRunnerRegistry {
         Self::default()
     }
 
-    /// 注册一条 handle；若同 guid 已存在则覆盖（design 未约束去重，简化处理）。
-    pub fn register(&self, handle: RunnerHandle) {
+    /// 注册一条 handle 并返回唯一 `RunId`。同 TaskGuid 多次 register（cache
+    /// hit 场景）各自得独立 RunId，互不覆盖。
+    pub fn register(&self, handle: RunnerHandle) -> RunId {
+        let id = RunId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let mut guard = self
             .inner
             .lock()
             .expect("ActiveRunnerRegistry mutex poisoned");
-        guard.insert(handle.task_guid.clone(), handle);
+        guard.insert(id, handle);
+        id
     }
 
     /// 移除并返回 handle；用于 runner 自然结束后清理表（design §流程图）。
-    pub fn unregister(&self, guid: &TaskGuid) -> Option<RunnerHandle> {
+    pub fn unregister(&self, run_id: RunId) -> Option<RunnerHandle> {
         let mut guard = self
             .inner
             .lock()
             .expect("ActiveRunnerRegistry mutex poisoned");
-        guard.remove(guid)
+        guard.remove(&run_id)
     }
 
-    /// 同 chat 多 task 时取**第一个**命中（design 注释：不是全部）。
+    /// 同 chat 多 task 时取**第一个**命中（design 注释：不是全部）——按 RunId
+    /// 升序意味着最早 register 的 run 先返回。
     ///
-    /// 顺序由 BTreeMap 的 `TaskGuid` 字典序决定，调用方不要依赖具体哪条；
-    /// 但 "第一个" 的语义保证了同输入同输出（确定性）。
-    pub fn lookup_by_chat_id(&self, chat_id: &str) -> Option<TaskGuid> {
+    /// 调用方期望"对该 chat 一条 HITL 信号"的语义；同 chat 并发多 run 时未
+    /// 命中的 run 不受 HITL 影响（已知 trade-off，留待后续考虑"send 到全部"
+    /// 语义）。
+    pub fn lookup_by_chat_id(&self, chat_id: &str) -> Option<RunId> {
         let guard = self
             .inner
             .lock()
@@ -112,26 +144,26 @@ impl ActiveRunnerRegistry {
         guard
             .iter()
             .find(|(_, h)| h.chat_id == chat_id)
-            .map(|(guid, _)| guid.clone())
+            .map(|(id, _)| *id)
     }
 
-    /// 给 guid 对应的 runner 发 HITL 信号。
+    /// 给 run_id 对应的 runner 发 HITL 信号。
     ///
     /// 实现细节：oneshot::Sender 的 send 消费 self，所以必须 `remove` handle 取所有权
     /// （send 成功后 handle 不再可用，表中清除天经地义；send 失败则 handle 已无用，
     /// 等价 receiver 端已退出，也清除）。
-    pub fn send_signal(&self, guid: &TaskGuid, sig: HitlSignal) -> Result<(), HitlSignalError> {
+    pub fn send_signal(&self, run_id: RunId, sig: HitlSignal) -> Result<(), HitlSignalError> {
         let mut guard = self
             .inner
             .lock()
             .expect("ActiveRunnerRegistry mutex poisoned");
         let handle = guard
-            .remove(guid)
-            .ok_or_else(|| HitlSignalError::NotFound(guid.clone()))?;
+            .remove(&run_id)
+            .ok_or(HitlSignalError::NotFound(run_id))?;
         handle
             .kill_tx
             .send(sig)
-            .map_err(|_| HitlSignalError::ReceiverGone(guid.clone()))?;
+            .map_err(|_| HitlSignalError::ReceiverGone(run_id))?;
         Ok(())
     }
 }
@@ -159,10 +191,10 @@ mod tests {
     async fn oneshot_send_signal_delivers_abort_to_receiver() {
         let reg = ActiveRunnerRegistry::new();
         let (h, rx) = mk_handle("g1", "oc_a");
-        reg.register(h);
+        let id = reg.register(h);
 
         reg.send_signal(
-            &TaskGuid::from_existing("g1"),
+            id,
             HitlSignal::Abort {
                 reason: "/stop".into(),
             },
@@ -179,10 +211,10 @@ mod tests {
     async fn oneshot_send_signal_delivers_adjust_to_receiver() {
         let reg = ActiveRunnerRegistry::new();
         let (h, rx) = mk_handle("g2", "oc_b");
-        reg.register(h);
+        let id = reg.register(h);
 
         reg.send_signal(
-            &TaskGuid::from_existing("g2"),
+            id,
             HitlSignal::Adjust {
                 body: "use sqlite".into(),
             },
@@ -196,16 +228,14 @@ mod tests {
     }
 
     #[test]
-    fn send_signal_unknown_guid_returns_not_found() {
+    fn send_signal_unknown_run_id_returns_not_found() {
         let reg = ActiveRunnerRegistry::new();
+        let ghost = RunId(9999);
         let err = reg
-            .send_signal(
-                &TaskGuid::from_existing("ghost"),
-                HitlSignal::Abort { reason: "x".into() },
-            )
+            .send_signal(ghost, HitlSignal::Abort { reason: "x".into() })
             .unwrap_err();
         match err {
-            HitlSignalError::NotFound(g) => assert_eq!(g.as_str(), "ghost"),
+            HitlSignalError::NotFound(id) => assert_eq!(id.as_u64(), 9999),
             other => panic!("expected NotFound, got {other:?}"),
         }
     }
@@ -214,34 +244,32 @@ mod tests {
     fn send_signal_receiver_dropped_returns_receiver_gone() {
         let reg = ActiveRunnerRegistry::new();
         let (h, rx) = mk_handle("g3", "oc_c");
-        reg.register(h);
+        let id = reg.register(h);
         drop(rx);
 
         let err = reg
-            .send_signal(
-                &TaskGuid::from_existing("g3"),
-                HitlSignal::Abort { reason: "x".into() },
-            )
+            .send_signal(id, HitlSignal::Abort { reason: "x".into() })
             .unwrap_err();
         assert!(matches!(err, HitlSignalError::ReceiverGone(_)));
     }
 
     #[test]
-    fn lookup_by_chat_id_returns_first_match_when_multiple_tasks_share_chat() {
+    fn lookup_by_chat_id_returns_first_registered_match_when_multiple_share_chat() {
         let reg = ActiveRunnerRegistry::new();
-        // 同 chat "oc_shared" 下 3 个 task，BTreeMap 字典序 g_a < g_b < g_c
+        // 同 chat 3 task，注册顺序 b → a → c；RunId 单增，最早 register 的（h_b）
+        // 排首位——这是 codex round-7 P1-2 修复的语义：以 RunId 为主键避免同
+        // TaskGuid 互相 overwrite，lookup_by_chat_id 返最早 RunId 命中的。
         let (h_a, _rx_a) = mk_handle("g_a", "oc_shared");
         let (h_b, _rx_b) = mk_handle("g_b", "oc_shared");
         let (h_c, _rx_c) = mk_handle("g_c", "oc_shared");
-        reg.register(h_b);
-        reg.register(h_a);
-        reg.register(h_c);
+        let _id_b = reg.register(h_b);
+        let _id_a = reg.register(h_a);
+        let _id_c = reg.register(h_c);
 
         let found = reg
             .lookup_by_chat_id("oc_shared")
             .expect("should find at least one");
-        // BTreeMap 字典序遍历 → 首个是 g_a
-        assert_eq!(found.as_str(), "g_a");
+        assert_eq!(found.as_u64(), 0, "earliest-registered (RunId=0) wins");
     }
 
     #[test]
@@ -256,16 +284,34 @@ mod tests {
     fn register_unregister_round_trip() {
         let reg = ActiveRunnerRegistry::new();
         let (h, _rx) = mk_handle("g1", "oc_x");
-        reg.register(h);
+        let id = reg.register(h);
 
-        let popped = reg.unregister(&TaskGuid::from_existing("g1"));
+        let popped = reg.unregister(id);
         assert!(popped.is_some());
         assert_eq!(popped.unwrap().task_guid.as_str(), "g1");
 
-        // 再 unregister 同 guid 应 None
+        // 再 unregister 同 id 应 None
         assert!(
-            reg.unregister(&TaskGuid::from_existing("g1")).is_none(),
+            reg.unregister(id).is_none(),
             "second unregister should return None"
         );
+    }
+
+    #[test]
+    fn register_same_task_guid_twice_yields_distinct_run_ids_no_overwrite() {
+        // P1-2 核心回归测试：relay_task cache hit 场景下同一 TaskGuid 多次
+        // register 必须各得独立 RunId，前一个 handle 不被覆盖。
+        let reg = ActiveRunnerRegistry::new();
+        let (h1, rx1) = mk_handle("g_same", "oc_x");
+        let (h2, rx2) = mk_handle("g_same", "oc_x");
+        let id1 = reg.register(h1);
+        let id2 = reg.register(h2);
+        assert_ne!(id1, id2);
+        // 两个 receiver 都还能拿到信号（h1 没被 h2 覆盖掉）。
+        reg.send_signal(id1, HitlSignal::Abort { reason: "s1".into() })
+            .expect("id1 still alive");
+        reg.send_signal(id2, HitlSignal::Abort { reason: "s2".into() })
+            .expect("id2 still alive");
+        drop((rx1, rx2));
     }
 }

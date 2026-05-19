@@ -442,9 +442,9 @@ async fn s7_4_active_registry_lookup_and_send_signal_works() {
         chat_id: "oc_match".into(),
         started_at: chrono::Utc::now(),
     });
-    let guid = reg.lookup_by_chat_id("oc_match").expect("registered");
+    let run_id = reg.lookup_by_chat_id("oc_match").expect("registered");
     reg.send_signal(
-        &guid,
+        run_id,
         HitlSignal::Abort {
             reason: "/stop".into(),
         },

@@ -484,9 +484,9 @@ async fn dispatch_hitl_abort(
     journal: &Journal,
     report: &mut BridgeReport,
 ) {
-    if let Some(guid) = active.lookup_by_chat_id(&ev.chat_id) {
+    if let Some(run_id) = active.lookup_by_chat_id(&ev.chat_id) {
         match active.send_signal(
-            &guid,
+            run_id,
             HitlSignal::Abort {
                 reason: reason.clone(),
             },
@@ -499,7 +499,7 @@ async fn dispatch_hitl_abort(
                     json!({
                         "bot_app_id": bot.app_id,
                         "chat_id": ev.chat_id,
-                        "task_guid": guid.as_str(),
+                        "run_id": run_id.as_u64(),
                         "reason": reason,
                     }),
                     JournalResult::Ok {
@@ -541,8 +541,8 @@ async fn dispatch_hitl_adjust(
     journal: &Journal,
     report: &mut BridgeReport,
 ) {
-    if let Some(guid) = active.lookup_by_chat_id(&ev.chat_id) {
-        match active.send_signal(&guid, HitlSignal::Adjust { body: body.clone() }) {
+    if let Some(run_id) = active.lookup_by_chat_id(&ev.chat_id) {
+        match active.send_signal(run_id, HitlSignal::Adjust { body: body.clone() }) {
             Ok(()) => {
                 report.hitl_adjust_signaled = report.hitl_adjust_signaled.saturating_add(1);
                 let _ = write_journal(
@@ -551,7 +551,7 @@ async fn dispatch_hitl_adjust(
                     json!({
                         "bot_app_id": bot.app_id,
                         "chat_id": ev.chat_id,
-                        "task_guid": guid.as_str(),
+                        "run_id": run_id.as_u64(),
                         "body_len": body.len(),
                     }),
                     JournalResult::Ok {
