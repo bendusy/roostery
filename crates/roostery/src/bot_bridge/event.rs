@@ -23,6 +23,7 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -145,7 +146,7 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
 
         let spawn_at = Instant::now();
         match spawn_subscribe(&opts.binary, &opts.profile) {
-            Ok((mut child, stdout)) => {
+            Ok((mut child, stdout, stderr_tail)) => {
                 let mut reader = BufReader::new(stdout).lines();
                 loop {
                     let line_res = reader.next_line().await;
@@ -204,10 +205,15 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
                                 Err(_) => None,
                             };
                             // 把 EOF 当 abnormal exit 上报（lark-cli subscribe 是长连接，
-                            // 不期望 EOF），但不阻断 stream。
+                            // 不期望 EOF），但不阻断 stream。stderr_tail 由 spawn_subscribe
+                            // 后台 drain task 实时收集，wait 完成后已含完整 tail。
+                            let stderr_str = stderr_tail
+                                .lock()
+                                .map(|g| String::from_utf8_lossy(&g).into_owned())
+                                .unwrap_or_default();
                             let err = EventError::ChildExitedAbnormally {
                                 exit_code,
-                                stderr_tail: String::new(),
+                                stderr_tail: stderr_str,
                             };
                             if tx.send(Err(err)).await.is_err() {
                                 return;
@@ -245,10 +251,13 @@ async fn run_loop(opts: ConsumeOpts, tx: mpsc::Sender<Result<ImEvent, EventError
     }
 }
 
-fn spawn_subscribe(
-    binary: &Path,
-    profile: &str,
-) -> std::io::Result<(tokio::process::Child, tokio::process::ChildStdout)> {
+type SubscribeChild = (
+    tokio::process::Child,
+    tokio::process::ChildStdout,
+    Arc<Mutex<Vec<u8>>>,
+);
+
+fn spawn_subscribe(binary: &Path, profile: &str) -> std::io::Result<SubscribeChild> {
     let mut cmd = Command::new(binary);
     cmd.arg("--profile")
         .arg(profile)
@@ -263,5 +272,33 @@ fn spawn_subscribe(
         .stdout
         .take()
         .ok_or_else(|| std::io::Error::other("child stdout pipe missing"))?;
-    Ok((child, stdout))
+    // P2 修复 (codex round-7 P2-2): 持续 drain stderr 到一个 cap=8KiB tail
+    // 缓冲区——之前 stderr 取了 piped 却从不读，子进程吐多了 stderr 就会
+    // 在 pipe 满后 block，subscribe 主体停发事件。drain task 与主 read 循
+    // 环并行，child.wait() 后自然终止（pipe close）。
+    let stderr_tail: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::with_capacity(STDERR_TAIL_CAP)));
+    if let Some(mut stderr) = child.stderr.take() {
+        let tail_clone = stderr_tail.clone();
+        tokio::spawn(async move {
+            let mut buf = [0u8; 4096];
+            loop {
+                match tokio::io::AsyncReadExt::read(&mut stderr, &mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        if let Ok(mut guard) = tail_clone.lock() {
+                            let take = n.min(STDERR_TAIL_CAP.saturating_sub(guard.len()));
+                            if take > 0 {
+                                guard.extend_from_slice(&buf[..take]);
+                            }
+                            // 已到 cap 后继续读但丢弃——保证 pipe 不阻塞。
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+    Ok((child, stdout, stderr_tail))
 }
+
+const STDERR_TAIL_CAP: usize = 8 * 1024;

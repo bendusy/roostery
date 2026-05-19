@@ -396,13 +396,24 @@ pub async fn run_bridge(
                             report.events_skipped_no_match.saturating_add(1);
                         continue;
                     }
-                    if opts.max_concurrency > 0
-                        && handle_joins.len() >= opts.max_concurrency
-                        && let Some(joined) = handle_joins.join_next().await
-                    {
-                        match joined {
-                            Ok(k) => report.bump_result(k),
-                            Err(_) => report.bump_result("error"),
+                    // P1 修复 (codex round-7 P1-3): 满载 backpressure 时让 await
+                    // 同时响应 cancel——之前裸 await handle_joins.join_next() 在
+                    // 满载场景下 ctrl_c / cancel_token 在当前 handle 跑完前观察不到，
+                    // shutdown 卡到 deadline 倒计时开始之前。改 tokio::select! 让
+                    // cancel/ctrl_c 优先。
+                    if opts.max_concurrency > 0 && handle_joins.len() >= opts.max_concurrency {
+                        tokio::select! {
+                            biased;
+                            _ = &mut ctrl_c_signal => {
+                                cancel.cancel();
+                                break ShutdownReason::CtrlC;
+                            }
+                            _ = cancel.cancelled() => break ShutdownReason::CtrlC,
+                            joined = handle_joins.join_next() => match joined {
+                                Some(Ok(k)) => report.bump_result(k),
+                                Some(Err(_)) => report.bump_result("error"),
+                                None => {}
+                            }
                         }
                     }
                     report.handle_event_spawned = report.handle_event_spawned.saturating_add(1);
