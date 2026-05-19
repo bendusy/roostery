@@ -1,7 +1,8 @@
 ---
 doc_type: issue-report
 issue: 2026-05-19-relay-task-per-chat-race
-status: open
+status: resolved
+resolved_at: 2026-05-19
 severity: P1
 summary: bot_bridge::relay_task::record_start 在 cache miss 时 load-then-create 没有 per-(bot_app_id, chat_id) 级别锁或 recheck-after-create，同 chat 并发两条事件首次到达会创建两条飞书 Task，最后一次 cache 写覆盖前一条 → 较早创建的 TaskGuid 变成孤儿。同时损坏的 cache JSON 因 load_cache 返 Ok(None) 也会触发同一路径（P2-1）。
 tags: [bot_bridge, relay_task, race, cache, idempotency]

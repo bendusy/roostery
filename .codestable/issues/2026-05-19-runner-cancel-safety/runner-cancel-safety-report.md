@@ -1,7 +1,8 @@
 ---
 doc_type: issue-report
 issue: 2026-05-19-runner-cancel-safety
-status: open
+status: deferred
+deferred_to: runner-tmux-launch
 severity: P1
 summary: bot_bridge::runner::handle_event 收到 HITL Abort/Adjust 时只是 drop runner future，没有显式 kill 底层子进程。bridge 侧报告已 aborted/restarted，但原 runner 进程仍在消耗 budget / 写文件 / 占用资源。runner-tmux-launch decision 落地前的中间态问题。
 tags: [bot_bridge, runner, hitl, cancel-safety, runner-trait]
@@ -75,13 +76,31 @@ HITL 信号可直接 `tmux kill-session` 命中。
 
 ## 6. 路径建议
 
-**短期**（≤ 1 个 commit）：路径 B——`CcHeadlessRunner::run` 内 Command
-builder 加 `.kill_on_drop(true)`，runner_future 被 drop 时 tokio 自动 SIGKILL
-子进程。trade-off：drop 时机受 tokio runtime 调度影响，有几十 ms 窗口子进程
-仍跑——可接受。
+**更新 2026-05-19**：尝试做 stop-gap 时发现"加一行 kill_on_drop"不可行。当前
+`CcHeadlessRunner::run` 用 `tokio::task::spawn_blocking` 跑 `std::process::Command`：
 
-**长期**：`runner-tmux-launch` feature 内重新设计 Runner trait 加 cancel
-方法，所有 impl 显式提供 kill 能力。
+- `std::process::Command` 没有 `kill_on_drop`（tokio::process 才有）
+- 即便换 tokio::process，`spawn_blocking` 任务的 JoinHandle 被 drop 后**子任务仍
+  继续运行**到自然完成（tokio 行为保证）——所以 Command 内的 Child 不会随
+  runner_future drop 而 kill
+
+真实修复需要其中一种结构性变化：
+
+- **路径 A**：把 `CcHeadlessRunner::run` 内部从 `spawn_blocking + std::process`
+  改为纯 tokio::process::Command + `kill_on_drop(true)` + async 读管道。约 80 行
+  改动，包括 drain_with_head_cap 模式改 async。
+- **路径 B**：保留 spawn_blocking，但 Runner trait 加 `fn cancel(&self)` 方法 +
+  CcHeadlessRunner 内 Arc<Mutex<Option<Child>>> 共享给 cancel 通过 child.kill()。
+- **路径 C**：等 `runner-tmux-launch` feature 落地，runner 走 tmux session 启动，
+  HITL 信号直接 `tmux kill-session`。
+
+**已有兜底**：`spawn_with_timeout` 内 `timeout_ms` 强制 kill 子进程；最坏情况
+是用户 /stop 后 runner 跑满整个 timeout 才退（cc 默认 ~5 分钟）。损害有界。
+
+**当前选择**：**不在本 issue 单独修**——三条路径都是结构性改动；其中路径 C
+已 approved decision，自然在 `runner-tmux-launch` feature 内解决（tmux session
+本身可被外部 kill-session 干净打断）。本 issue 改 status 为 `deferred-to:
+runner-tmux-launch`，跟 feature 一起 close。
 
 ## 7. 关联
 

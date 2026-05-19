@@ -14,9 +14,12 @@
 //! 测试约定参 `bot_task_writer` 模块——`isolate_home` 走 `ROOSTERY_HOME` env，
 //! 测试共享 `paths::TEST_ENV_LOCK` 串行化。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::bot_task_writer::{
     AppendStepsOptions, CreateTaskOptions, TaskGuid, TaskRef, TaskWriterError, append_steps,
@@ -141,6 +144,34 @@ fn cache_path_for(bot_app_id: &str, chat_id: &str) -> PathBuf {
     crate::paths::bot_chat_cache_dir(bot_app_id).join(safe_chat_filename(chat_id))
 }
 
+// --- per-(bot, chat) 序列化锁池（codex round-7 P1-6 / P2-1 修复） ---------
+//
+// `record_start` 在 cache miss 时是 load-then-create 两步——若两条同 chat 事件
+// 几乎同时到达，两个 handle_event 都看到 cache None，都 create_task，飞书侧
+// 多出重复 task（较早的 TaskGuid 变孤儿）。`load_cache` 对 corrupt JSON 也返
+// `Ok(None)` (P2-1)，触发同一路径。
+//
+// 用 tokio::sync::Mutex 池按 (bot_app_id, chat_id) 串行化 record_start /
+// record_adjust / record_end 三入口的整个 cache 读-写区段。不同 chat 并行
+// 不受影响。
+//
+// 锁条目随用随建，不会被回收——每条独立 chat 在表里留一个空 Mutex（几十
+// 字节）。daemon 长跑下同 bot 的 chat 数有限，这层"泄漏"可接受；要 GC 时
+// 加 LRU。
+type ChatLockKey = (String, String);
+type ChatLockPool = std::sync::Mutex<HashMap<ChatLockKey, Arc<AsyncMutex<()>>>>;
+static CHAT_LOCKS: OnceLock<ChatLockPool> = OnceLock::new();
+
+fn chat_lock(bot_app_id: &str, chat_id: &str) -> Arc<AsyncMutex<()>> {
+    let pool = CHAT_LOCKS.get_or_init(|| std::sync::Mutex::new(HashMap::new()));
+    let key = (bot_app_id.to_string(), chat_id.to_string());
+    let mut guard = pool.lock().expect("chat lock pool poisoned");
+    guard
+        .entry(key)
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
+
 // --- cache I/O ---------------------------------------------------------
 
 /// 读 cache。文件不存在返 Ok(None)；解析失败返 Ok(None) 让 caller 走 create
@@ -248,6 +279,8 @@ pub async fn record_start(
     event: &ImEvent,
     message_brief: &str,
 ) -> Result<Option<TaskRef>, RelayTaskError> {
+    let lock = chat_lock(&bot.app_id, &event.chat_id);
+    let _guard = lock.lock().await;
     let path = cache_path_for(&bot.app_id, &event.chat_id);
 
     let start_key = idem_key("step-start", &event.message_id, &bot.app_id);
@@ -314,6 +347,9 @@ pub async fn record_adjust(
     adjust_text: &str,
     attempt: u32,
 ) -> Result<(), RelayTaskError> {
+    // chat_lock 与 record_start / record_end 共享，串行化 cache.adjust_count 累加
+    let lock = chat_lock(&bot.app_id, chat_id);
+    let _guard = lock.lock().await;
     let path = cache_path_for(&bot.app_id, chat_id);
     if let Ok(Some(mut entry)) = load_cache(&path) {
         entry.adjust_count = entry.adjust_count.saturating_add(1);
@@ -344,6 +380,9 @@ pub async fn record_end(
     outcome: &EndOutcome,
     result_text: &str,
 ) -> Result<Option<TaskRef>, RelayTaskError> {
+    // chat_lock 与 record_start / record_adjust 共享
+    let lock = chat_lock(&bot.app_id, chat_id);
+    let _guard = lock.lock().await;
     let path = cache_path_for(&bot.app_id, chat_id);
     let Some(mut entry) = load_cache(&path)? else {
         // cache 没建（record_start 失败 / 丢失）——append step 无可附，直接返 None。
@@ -471,6 +510,45 @@ mod tests {
 
         // 总调用次数：4 (first miss) + 1 (second hit append) = 5
         assert_eq!(mock.calls().len(), 5);
+
+        restore_home();
+    }
+
+    /// P1-6 回归测试（codex round-7）：同 chat 并发两次 record_start 必须
+    /// 通过 chat_lock 串行化——飞书侧只看到 1 个 create_task 调用，第二条
+    /// cache hit 复用同 TaskGuid。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn record_start_concurrent_same_chat_serializes_no_duplicate_task() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        isolate_home(&tmp);
+
+        let mock = std::sync::Arc::new(MockLarkRunner::new());
+        // 只灌 1 套 cache-miss mock 响应（4 calls）+ 1 个 append（第二条 cache hit）
+        enqueue_record_start_miss(&mock);
+        mock.enqueue_ok(json!({"ok": true}));
+
+        let bot = std::sync::Arc::new(mk_bot("cli_bot_race"));
+        let ev1 = mk_event("oc_race", "om_x");
+        let ev2 = mk_event("oc_race", "om_y");
+
+        // 并发：两条同 chat 不同 message_id 同时 record_start
+        let mock_a = mock.clone();
+        let bot_a = bot.clone();
+        let t1 =
+            tokio::spawn(async move { record_start(&*mock_a, &bot_a, &ev1, "brief A").await });
+        let mock_b = mock.clone();
+        let bot_b = bot.clone();
+        let t2 =
+            tokio::spawn(async move { record_start(&*mock_b, &bot_b, &ev2, "brief B").await });
+
+        let r1 = t1.await.unwrap().unwrap().unwrap();
+        let r2 = t2.await.unwrap().unwrap().unwrap();
+        assert_eq!(r1.guid, r2.guid, "两次并发 record_start 应共享同一 TaskGuid");
+
+        // mock 总调用次数 = 4 (cache miss: auth + profile + create_task + start_step)
+        // + 1 (cache hit: start_step) = 5。如果有 race 会变 8（两份 miss）。
+        assert_eq!(mock.calls().len(), 5, "create_task 必须只被调一次");
 
         restore_home();
     }
