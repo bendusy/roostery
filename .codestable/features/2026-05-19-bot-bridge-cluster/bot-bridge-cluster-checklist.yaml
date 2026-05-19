@@ -32,7 +32,7 @@ steps:
 
   - action: "测试覆盖收尾 + 反向核对：补齐 §3 边界 / 错误场景剩余条目 + 跑红线 grep（reqwest / Command::new(\"lark-cli\") / FEISHU_HUB_* / os::unix signal / base_intent_router）确认 bot_bridge/ 内 0 命中"
     exit_signal: "cargo test --all 全绿 + cargo clippy --all-targets --all-features -- -D warnings 全绿 + cargo fmt --all --check pass + §3 验收契约 N1-N4 / B1-B6 / E1-E4 / G1-G6 全部有可观察证据"
-    status: pending
+    status: done
 
 checks:
   - item: "BotsConfig + BotRole + BOTS_SCHEMA_VERSION=1 公开承诺 + 4 错误变体到位"

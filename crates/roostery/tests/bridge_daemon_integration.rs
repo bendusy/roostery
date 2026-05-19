@@ -323,6 +323,111 @@ exec tail -f /dev/null
     assert_eq!(report.events_skipped_no_match, 0);
 }
 
+/// design §3 E4：handle_event 协程内 panic → tokio JoinSet 隔离 → daemon main loop
+/// 继续消费后续 event 不退出；BridgeReport 把 panic 计入 `error` 而不是 success。
+///
+/// 构造：runner 第一次 run 直接 `panic!`，第二次 run 正常 Success。Feed 两条 @bot 事件，
+/// 期望 daemon 处理完 2 条且 1 条 error + 1 条 success。
+#[tokio::test]
+async fn s8_handle_event_panic_is_isolated_daemon_continues() {
+    struct PanicOnceRunner {
+        kind_str: &'static str,
+        invocations: AtomicU32,
+    }
+    #[async_trait]
+    impl Runner for PanicOnceRunner {
+        fn kind(&self) -> &'static str {
+            self.kind_str
+        }
+        async fn run(
+            &self,
+            _event: &HookEvent,
+            _ctx: &TraceContext,
+            _args: &serde_json::Value,
+        ) -> Result<RunOutcome, RunnerError> {
+            let idx = self.invocations.fetch_add(1, Ordering::SeqCst);
+            if idx == 0 {
+                panic!("simulated runner panic for E4 test");
+            }
+            Ok(RunOutcome {
+                status: RunnerStatus::Success,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+                emitted_events: Vec::new(),
+                cost_usd: None,
+            })
+        }
+    }
+
+    let body = r#"cat <<'JSON'
+{"message_id":"mp1","chat_id":"oc_match","chat_type":"group","message_type":"text","sender_id":"u1","content":"@tl panic please"}
+{"message_id":"mp2","chat_id":"oc_match","chat_type":"group","message_type":"text","sender_id":"u1","content":"@tl now success"}
+JSON
+exec tail -f /dev/null
+"#;
+    let (_fixture_dir, lark_bin) = fixture_script(body);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let bots_path = write_bots_yaml(tmp.path());
+    let journal_dir = tmp.path().join("journal");
+
+    // 两条 @bot 都会进 handle_event → 都会先走 relay_task identity+create+append_start。
+    // 第一条 runner panic → 在 select 前的 record_start 已经做了 lark 调用；
+    // 第二条会走完整 Success 路径。预灌两套 enqueue_relay_success 即可（第一条
+    // panic 走完 start step 后还会被 panic 截断；第二条完整 5 calls）。
+    let mock = MockLarkRunner::new();
+    enqueue_relay_success(&mock);
+    enqueue_relay_success(&mock);
+    let mock_arc: Arc<dyn roostery::lark_cli::LarkRunner> = Arc::new(mock);
+
+    let registry = Arc::new(RunnerRegistry::new().with_runner(Box::new(PanicOnceRunner {
+        kind_str: "test_runner",
+        invocations: AtomicU32::new(0),
+    })));
+
+    let opts = BridgeOptions {
+        max_events: 2,
+        event_channel_buffer: 8,
+        // 强制串行：max_concurrency=1 → 第一条 panic 必然在第二条 spawn 前被 join
+        max_concurrency: 1,
+        shutdown_deadline: Duration::from_secs(3),
+        lark_binary: Some(lark_bin),
+        journal_dir: Some(journal_dir),
+        runner_registry: Some(registry),
+        lark_runner: Some(mock_arc),
+        ..BridgeOptions::default()
+    };
+
+    let report = tokio::time::timeout(Duration::from_secs(15), run_bridge(&bots_path, opts))
+        .await
+        .expect("daemon must not hang on panic")
+        .expect("daemon ok");
+
+    // 关键不变量：daemon 没被 panic 拖垮——两条 event 都被收到并 spawn handle_event。
+    assert_eq!(report.events_received, 2, "report={report:?}");
+    assert_eq!(report.handle_event_spawned, 2, "report={report:?}");
+    // 至少 1 条 error（panic 那条）；至少 1 条 success（第二条）。
+    let error_count = report
+        .handle_event_results
+        .get("error")
+        .copied()
+        .unwrap_or(0);
+    let success_count = report
+        .handle_event_results
+        .get("success")
+        .copied()
+        .unwrap_or(0);
+    assert!(
+        error_count >= 1,
+        "panic 应计入 error 结果，report={report:?}"
+    );
+    assert!(
+        success_count >= 1,
+        "第二条应正常 Success，report={report:?}"
+    );
+    assert_eq!(report.shutdown_reason, Some(ShutdownReason::MaxEvents));
+}
+
 /// 直接单测 ActiveRunnerRegistry::send_signal 路径：daemon 内部 dispatch_hitl_abort 调用同样
 /// 的内部 helper，行为已被 active_registry 单测覆盖。本测试只是冗余确认 register/lookup 链路
 /// 与外部 build 的 RunnerHandle 兼容。

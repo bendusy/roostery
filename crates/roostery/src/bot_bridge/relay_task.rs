@@ -761,4 +761,101 @@ mod tests {
 
         restore_home();
     }
+
+    // --- T9: design §3 E2 — create_task 失败 → record_start 退化为 Ok(None) -
+
+    /// E2 验收契约：create_task 调用失败时 record_start 不向 caller 传播错误，
+    /// 而是返回 `Ok(None)`，让 runner.rs 走 placeholder TaskGuid 路径（不阻塞
+    /// runner 主路径）。
+    #[tokio::test]
+    async fn record_start_absorbs_create_task_error_returns_none() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        isolate_home(&tmp);
+
+        let mock = MockLarkRunner::new();
+        // identity::current 还是要先走（auth status + profile list）才进 create_task。
+        mock.enqueue_ok(auth_status_response());
+        mock.enqueue_ok(profile_list_response());
+        // create_task 失败：注入 Timeout 错误。
+        mock.enqueue_err(crate::lark_cli::LarkError::Timeout { timeout_ms: 1 });
+
+        let bot = mk_bot("cli_bot_e2");
+        let ev = mk_event("oc_e2", "om_e2");
+        let r = record_start(&mock, &bot, &ev, "brief").await.unwrap();
+        assert!(r.is_none(), "create_task 失败 → record_start 应吸收为 None");
+
+        // 关键不变量：cache 文件没被写出来（防止 placeholder guid 被持久化干扰下一条接力）。
+        let path = cache_path_for(&bot.app_id, &ev.chat_id);
+        assert!(
+            !path.exists(),
+            "E2 路径不应留下 cache 文件，否则下次 @bot cache hit 拿假 guid"
+        );
+
+        restore_home();
+    }
+
+    // --- T10: design §3 N4 — 多 bot 各自独立 chat→task 缓存目录 -----------
+
+    /// N4 验收契约：两个 BotRole 在同一 chat_id 上各自 record_start →
+    /// 缓存路径必须落在 `~/.roostery/state/bot_chats/{app_id_a}/` 与
+    /// `{app_id_b}/` 两个独立目录，互不串台。
+    #[tokio::test]
+    async fn multi_bot_record_start_uses_isolated_cache_dirs() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        isolate_home(&tmp);
+
+        let mock = MockLarkRunner::new();
+        enqueue_record_start_miss(&mock); // bot_a path
+        enqueue_record_start_miss(&mock); // bot_b path
+
+        let bot_a = mk_bot("cli_bot_alpha");
+        let bot_b = mk_bot("cli_bot_beta");
+        let ev = mk_event("oc_shared", "om_n4a");
+
+        let r_a = record_start(&mock, &bot_a, &ev, "from alpha")
+            .await
+            .unwrap()
+            .unwrap();
+        let ev2 = mk_event("oc_shared", "om_n4b");
+        let r_b = record_start(&mock, &bot_b, &ev2, "from beta")
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 路径隔离：每个 bot 各自目录下都有自己的 cache 文件。
+        let path_a = cache_path_for(&bot_a.app_id, &ev.chat_id);
+        let path_b = cache_path_for(&bot_b.app_id, &ev.chat_id);
+        assert!(path_a.exists(), "alpha cache must exist: {path_a:?}");
+        assert!(path_b.exists(), "beta cache must exist: {path_b:?}");
+        assert_ne!(
+            path_a.parent().unwrap(),
+            path_b.parent().unwrap(),
+            "两 bot 的 cache 父目录必须不同"
+        );
+        assert!(path_a.to_string_lossy().contains("cli_bot_alpha"));
+        assert!(path_b.to_string_lossy().contains("cli_bot_beta"));
+
+        // 行为隔离：两个 TaskRef 来自独立 create_task 调用——guid 文本一致是因 mock 复用，
+        // 但 cache 文件本身物理隔离，下一条 @ alpha 不会读到 beta 的 cache。
+        // 重新走一次 alpha 的 record_start（应 cache hit，无 create_task 调用）。
+        mock.enqueue_ok(json!({"ok": true})); // 仅 1 次 append_steps
+        let ev3 = mk_event("oc_shared", "om_n4a_again");
+        let r_a2 = record_start(&mock, &bot_a, &ev3, "alpha again")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(r_a.guid, r_a2.guid, "alpha cache hit 必须返回同 guid");
+        assert_ne!(
+            r_a.guid.as_str(),
+            "", // sanity
+            "guid should be non-empty"
+        );
+        // beta 的 cache 没被覆盖
+        assert!(path_b.exists(), "beta cache should be untouched");
+        assert_eq!(r_b.guid.as_str(), "task_guid_xyz");
+
+        restore_home();
+    }
 }
