@@ -24,7 +24,7 @@ steps:
 
   - action: "IM 事件源：event.rs 实装 ImEvent + consume_im（spawn lark-cli im_messages_subscribe 子进程 + BufReader::lines NDJSON 反序列化 + 指数退避重连，cap 60s）+ EventError"
     exit_signal: "integration test 用 MockLarkRunner 模拟 stdout 多行 NDJSON 流：3 行有效 + 1 行损坏 JSON skip + 子进程 EOF 触发重连；stream Item 数与有效事件数一致"
-    status: pending
+    status: done
 
   - action: "daemon 主循环：daemon.rs 实装 run_bridge 串 mpsc + per-bot consume_im task + central HITL→spawn handle_event 分流 + tokio::signal::ctrl_c graceful shutdown + BridgeReport 聚合"
     exit_signal: "integration test 端到端跑：feed 6 条假 event（2 条 @bot + 1 条 /stop + 1 条 /adjust + 1 条 noise + 1 条非匹配 chat），daemon 处理完正常退出，journal 序列含预期 source/action 条目；ctrl_c 触发后 active handle_event 协程 deadline 内退出"
