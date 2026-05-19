@@ -20,6 +20,11 @@ use thiserror::Error;
 
 pub const DEFAULT_WINDOW_SECS: u64 = 300;
 pub const DEFAULT_THRESHOLD: u32 = 10;
+/// Every N `record()` calls, do a full sweep removing buckets whose all
+/// entries are outside the window. Bounds memory at O(active_in_window +
+/// PRUNE_EVERY) instead of unbounded growth as unique trace_ids accumulate.
+/// Fixes issue 2026-05-19-runaway-tracker-empty-bucket-leak.
+const PRUNE_EVERY: u32 = 256;
 
 type Clock = Box<dyn Fn() -> Instant + Send + Sync>;
 
@@ -28,6 +33,7 @@ pub struct RunawayTracker {
     threshold: u32,
     fires: BTreeMap<TraceId, Vec<Instant>>,
     clock: Clock,
+    record_count_since_prune: u32,
 }
 
 impl RunawayTracker {
@@ -41,6 +47,7 @@ impl RunawayTracker {
             threshold,
             fires: BTreeMap::new(),
             clock: Box::new(Instant::now),
+            record_count_since_prune: 0,
         }
     }
 
@@ -54,6 +61,7 @@ impl RunawayTracker {
             threshold,
             fires: BTreeMap::new(),
             clock: Box::new(clock),
+            record_count_since_prune: 0,
         }
     }
 
@@ -62,10 +70,40 @@ impl RunawayTracker {
     pub fn record(&mut self, trace_id: &TraceId) -> u32 {
         let now = (self.clock)();
         let cutoff = now.checked_sub(self.window).unwrap_or(now);
+        // 周期性扫除"完全过期 bucket"——见 PRUNE_EVERY 文档。
+        self.record_count_since_prune = self.record_count_since_prune.saturating_add(1);
+        if self.record_count_since_prune >= PRUNE_EVERY {
+            self.prune_expired(cutoff);
+            self.record_count_since_prune = 0;
+        }
         let bucket = self.fires.entry(trace_id.clone()).or_default();
         bucket.retain(|ts| *ts >= cutoff);
         bucket.push(now);
         bucket.len() as u32
+    }
+
+    /// 手动触发一次过期 bucket 清扫。Daemon 主循环可在 idle 时调用，或单纯
+    /// 依赖 `record()` 内的周期清扫。返清扫掉的 bucket 数（含部分清掉的）。
+    pub fn prune(&mut self) -> usize {
+        let now = (self.clock)();
+        let cutoff = now.checked_sub(self.window).unwrap_or(now);
+        self.prune_expired(cutoff)
+    }
+
+    /// 内部清扫：从每个 bucket 内剔除过期 Instant，整个 bucket 都过期则
+    /// 整条移除。返清扫的 bucket 数。
+    fn prune_expired(&mut self, cutoff: Instant) -> usize {
+        let before = self.fires.len();
+        self.fires.retain(|_, v| {
+            v.retain(|ts| *ts >= cutoff);
+            !v.is_empty()
+        });
+        before - self.fires.len()
+    }
+
+    /// 当前驻留的 bucket 数（测试 / 监控用）。
+    pub fn bucket_count(&self) -> usize {
+        self.fires.len()
     }
 
     /// Return current window count or `Err(Detected)` if count reaches
@@ -206,5 +244,63 @@ mod tests {
     fn check_on_unknown_trace_returns_zero() {
         let t = RunawayTracker::new();
         assert_eq!(t.check(&tid("never-recorded")).unwrap(), 0);
+    }
+
+    // --- issue 2026-05-19-runaway-tracker-empty-bucket-leak 回归 ---
+
+    #[test]
+    fn manual_prune_removes_fully_expired_buckets() {
+        let base = Instant::now();
+        let advance = Arc::new(AtomicU64::new(0));
+        let advance_clock = advance.clone();
+        let mut t = RunawayTracker::with_clock(Duration::from_secs(10), 5, move || {
+            base + Duration::from_secs(advance_clock.load(Ordering::SeqCst))
+        });
+
+        // 10 个 trace_id 各 record 一次，bucket_count = 10
+        for i in 0..10 {
+            t.record(&tid(&format!("trace-{i}")));
+        }
+        assert_eq!(t.bucket_count(), 10);
+
+        // 时钟跳过窗口 → 所有 entries 过期 → prune 清扫整张表
+        advance.store(11, Ordering::SeqCst);
+        let removed = t.prune();
+        assert_eq!(removed, 10);
+        assert_eq!(t.bucket_count(), 0);
+    }
+
+    #[test]
+    fn periodic_auto_prune_keeps_memory_bounded() {
+        // 模拟 daemon 长跑：很多独立 trace_id 各 fire 一次后再不出现；prune
+        // 阈值（PRUNE_EVERY=256）触发后过期 bucket 被清扫。
+        let base = Instant::now();
+        let advance = Arc::new(AtomicU64::new(0));
+        let advance_clock = advance.clone();
+        let mut t = RunawayTracker::with_clock(Duration::from_secs(10), 5, move || {
+            base + Duration::from_secs(advance_clock.load(Ordering::SeqCst))
+        });
+
+        // 第一波 200 条独立 trace_id（在窗口内）→ 全部驻留
+        for i in 0..200 {
+            t.record(&tid(&format!("first-{i}")));
+        }
+        assert_eq!(t.bucket_count(), 200);
+
+        // 时钟跳过窗口
+        advance.store(11, Ordering::SeqCst);
+
+        // 第二波 60 条新 trace_id（在 PRUNE_EVERY 边界附近）；超过 256-200=56
+        // 时触发 record 内的 prune_expired，清掉 first-* 那批
+        for i in 0..60 {
+            t.record(&tid(&format!("second-{i}")));
+        }
+
+        // first-* 应被清扫（已过期），second-* 仍驻留
+        assert!(
+            t.bucket_count() <= 60,
+            "expected ≤60 buckets after auto-prune, got {}",
+            t.bucket_count()
+        );
     }
 }

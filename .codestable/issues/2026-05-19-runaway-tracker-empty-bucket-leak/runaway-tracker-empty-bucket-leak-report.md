@@ -1,7 +1,8 @@
 ---
 doc_type: issue-report
 issue: 2026-05-19-runaway-tracker-empty-bucket-leak
-status: open
+status: resolved
+resolved_at: 2026-05-19
 severity: P3
 summary: `RunawayTracker.fires: BTreeMap<TraceId, Vec<Instant>>` 不清理过期空 bucket。dispatcher daemon 长跑下每个独立 TraceId 至少残留一个 key + 旧 Instant，内存累计有界但慢增长（每条 trace ~32 字节起步），未来 Phase 5 bot-bridge daemon 拉起后会更明显。
 tags: [dispatcher, runaway, memory-leak, daemon, observation]
