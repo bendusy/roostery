@@ -3,7 +3,7 @@ doc_type: roadmap
 slug: rust-rewrite
 status: active
 created: 2026-05-15
-last_reviewed: 2026-05-15
+last_reviewed: 2026-05-19
 tags: [rust, rewrite, porting, milestone]
 related_requirements: [agent-work-in-feishu, runtime-neutral, portable-by-default]
 related_architecture: [ARCHITECTURE]
@@ -33,6 +33,7 @@ Roostery 现有代码是从 prior `feishu_hub` baseline 整体 import 的 Python
 - **不做 0.1.0 之后的 release 节奏规划**——本 roadmap 推到 0.1.0 验收为止，后续版本演进等首发后再起新 roadmap
 - **不在 Rust port 期间引入新功能**——port 期间发现 Python 版有缺陷 / 想加的新能力，记观察项推后处理，不让 scope 漂移
 - **不做 Feishu SDK / 直连 HTTP / WebSocket 等替代 `lark-cli` 的实现**——架构红线
+- **不引外部 LLM SDK / 不用 HTTP client 直连 LLM endpoint**——Roostery 二进制对任意 LLM provider 0 binding；需要 LLM 能力（daily-recap 等）通过 §4.8 `Summarizer` trait 委托给用户已装的 agent runtime CLI。架构红线，与上一条并列
 - **不做 GUI / TUI**——CLI-only
 - **不做 PyO3 互操作**——Python 与 Rust 不共存，到 Phase 7 整体切换
 - **不做"自建非飞书前端"**——portable-by-default req 承诺数据形态可移植，但 Roostery 自身不附带其他 view（社区扩展点）
@@ -94,9 +95,9 @@ Roostery Rust
 - **触碰的现有代码**：全新（Python 版 `task_writer.py` + `stop_hook.py` + `bot_*.py` + `hitl_router.py` 作 reference）
 
 ### 模块 G · Reporting
-- **职责**：日报功能 —— git log 多仓聚合 + LLM 摘要 + 写飞书 docx + Base 记录。`llm_summary.rs` 是唯一允许 import 外部 LLM client 的模块（架构红线）。Cargo feature flag 控制，默认开
-- **承载的子 feature**：`report-git-llm`、`report-daily`
-- **触碰的现有代码**：全新（Python 版 `git_log.py` + `llm_summary.py` + `daily_report.py` + `record_writer.py` 作 reference）
+- **职责**：日报功能 —— git log 多仓聚合 + 摘要生成（**复用 §4.3 `Runner` trait + `RunnerRegistry`，不走 `dispatcher::fire` 事件流**：daily-recap 直接 `registry.find(kind).run(synthetic_event, trace, args)` + 自管 `BudgetGuard` 跨进程锁 + 自写 `JournalEntry source="daily_recap"`；理由：dispatcher.fire 是 hook-event 分发 API 返 trace 摘要不返业务输出，daily-recap 是 one-shot string-return call 语义不同，强行复用 fire 要把它改成 RPC API 不值——见 `2026-05-19-report-recap-engine` design §0 D5 + codex review 留痕）+ 写飞书 docx + Base 记录。**Roostery 自身不引外部 LLM SDK / 不用 reqwest 直连 LLM endpoint**，0 LLM client import 在任何模块——LLM 调用是用户已装 agent CLI 子进程的"副作用"，不是 Roostery 自身的 capability。Cargo feature flag `daily-report` 控制（默认开）
+- **承载的子 feature**：`report-recap-engine`、`report-daily`
+- **触碰的现有代码**：全新（Python 版 `git_log.py` + `llm_summary.py` + `daily_report.py` + `record_writer.py` 作 reference；Python 版 `llm_summary.py` 直接调外部 SDK 的做法不照搬——Rust 版走 dispatcher 复用，0 LLM client 依赖）
 
 ### 模块 H · Base Index
 - **职责**：Feishu Base 作为索引层（**非** source of truth）。包含 Base config / indexer / intent_router
@@ -486,18 +487,19 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 
 ### Module G · Reporting
 
-18. **`report-git-llm`** — `git_log` 多仓聚合 + `llm_summary`（**唯一**允许 `reqwest` 直连外部 LLM 的模块，架构红线）
+18. **`report-recap-engine`** — `git_log` 多仓聚合 + `roostery daily-recap` 子命令 + 直接调 `RunnerRegistry::find(kind).run` 委托用户已装 agent CLI（**复用 §4.3 Runner trait 但不走 dispatcher::fire**；自管 BudgetGuard + JournalEntry；Roostery 不直连 LLM）
     - 所属模块：G
-    - 依赖：`rust-scaffold`
-    - 状态：planned
-    - 主要支持的 req：—（产品扩展能力，未在三份 draft req 明确覆盖）
-    - 备注：Phase 6；Cargo feature flag `daily-report` 默认开；`cargo build --no-default-features` 必须能剥掉 `reqwest` 验证边界
+    - 依赖：`rust-scaffold`、`dispatcher-runners`（Runner trait + Registry）、`dispatcher-trace-budget`（TraceContext + BudgetGuard）、`journal-core`、`core-redact`、`config-yaml`
+    - 状态：**done**（2026-05-19）
+    - 主要支持的 req：[`daily-dev-recap`](../../requirements/daily-dev-recap.md) + [`runtime-neutral`](../../requirements/runtime-neutral.md)（Runner trait 复用本身就是 runtime-neutral 的又一次兑现——daily-recap 不绑某家 LLM provider，跟着用户选的 Runner 走）
+    - 对应 feature：`2026-05-19-report-recap-engine`（533 lib tests + 8 integration tests + clippy 双 build mode 全绿）
+    - 备注：Phase 6；Cargo feature flag `daily-report` 默认开；`cargo build --no-default-features` 剥掉的是 daily-recap 子命令注册 + module 编译（**不涉及 `reqwest` 边界**——reqwest 整个不被 Roostery 引）。**不走 dispatcher::fire**——daily-recap 是 one-shot string-return call，跟 hook event 分发语义不同；详见 design §0 D5 + codex review 留痕。原 slug `report-git-llm` 于 2026-05-19 改名。Accepted 2026-05-19，4 轮 codex review + 5 个 design 版本（v1→v5）。ARCHITECTURE.md §3 Module G + §5.5 + §5.10（新增）+ §6.3 三处归并。req `daily-dev-recap` 仍保 draft——待 `report-daily` 把 `RecapOutcome` 真写到飞书 docx + Base 后一并升 current为 `report-recap-engine`
 
 19. **`report-daily`** — Daily report 主流程 + `record_writer`（写飞书 docx + Base 记录）
     - 所属模块：G
-    - 依赖：`report-git-llm`、`lark-cli-wrapper`、`journal-core`、`config-yaml`
+    - 依赖：`report-recap-engine`、`lark-cli-wrapper`、`journal-core`、`config-yaml`
     - 状态：planned
-    - 主要支持的 req：—（产品扩展能力）
+    - 主要支持的 req：[`daily-dev-recap`](../../requirements/daily-dev-recap.md)
     - 备注：Phase 6
 
 ### Module H · Base Index
@@ -549,10 +551,14 @@ pub const CODEX_STOP_HOOK_JSON: &str = include_str!("templates/codex_stop_hook.j
 - **`bot-bridge-cluster`（第 17 条）行为文档薄弱**——Python 版 `bot_role.py` / `bot_bridge.py` / `bot_relay_task.py` / `hitl_router.py` 互相耦合较紧但 ARCHITECTURE.md 对这一组只有"参与 M3.B 主路径"级别的简述。Phase 5 临近时建议先走 `cs-arch new` 把这一组现状梳理出来（甚至可能要起 draft req 描述"HITL 路由 / agent 角色管理"这一独立能力），避免 feature-design 时无契约可依
 - **代码-文档失配登记**（已写入 §2 代码-文档对齐原则）——建议在 `.codestable/compound/code-doc-misalignment-log.md`（learning 类型）累积失配发现，每条 feature-design / acceptance 顺手补，便于后期 review 一并刷新文档
 - **CLAUDE.md / ARCHITECTURE.md 时间线问题**（已在 brainstorm v0.x-direction open questions）——它们现在描述 Python 是 going-forward，但本 roadmap Phase 0 第一步就是归档。`rust-scaffold` feature 落地时一并改这两个文档比较自然，但不强制写进 feature scope
-- **Phase 6 推迟项**——LLM provider 默认家、crates.io 发布时机：等 Phase 6 临近再决，不在本 roadmap 范围（brainstorm v0.x-direction 已记）
-- **`report-git-llm` / `report-daily` / `base-indexer` 缺 req 覆盖**——这三条目前所支持的 req 列"—"。它们承载的能力（日报生成 / Base 索引）值不值得起 draft req？建议在 Phase 6 / Phase 7 启动前补 req；也可能届时决定砍掉作为 Roostery 范围
+- **Phase 6 推迟项 crates.io 发布时机**——等 Phase 6 临近再决，不在本 roadmap 范围（brainstorm v0.x-direction 已记）。**LLM provider 默认家**议题已于 2026-05-19 决定：不挑 provider，通过 §4.8 `Summarizer` trait 复用用户已装 agent runtime（见 §8 变更日志）
+- **`base-indexer` 缺 req 覆盖**——这条目前所支持的 req 列"—"。承载的能力（Base 索引）值不值得起 draft req？建议在 Phase 7 启动前补；也可能届时决定砍掉作为 Roostery 范围。（`report-recap-engine` / `report-daily` 已于 2026-05-19 由 `daily-dev-recap` req 覆盖）
+- **本次 §3 Module G 改写 / §2 加红线的下游同步**——以下三处现在和 roadmap 表述不一致，需要后续单独走对应 skill 刷新（**不阻塞** Phase 6 启动）：
+    - `.codestable/attention.md` "LLM provider 客户端只允许在 `llm_summary.rs` import" → 走 `cs-note` 改为"不允许任何模块 import 外部 LLM client / 用 reqwest 打 LLM endpoint"
+    - `.codestable/architecture/ARCHITECTURE.md` §5 第 3 / 第 5 条 LLM 红线表述同上 → 走 `cs-arch update`
+    - `.codestable/requirements/daily-dev-recap.md` 边界第 5 条 "LLM 显式破例" 措辞可软化——Roostery 自身不破例，是用户跟自己 agent 厂商既有关系决定的 → 走 `cs-req update`（或留到 feature acceptance 一并处理）
 - **原 `planning/2026-05-15-rust-rewrite.md` 的去向**——本 roadmap 起草时已在该文件头部加注"phase 拆解已迁至本 roadmap"，原文件保留作 Rust 学习目标 + 技术选型档案。本 roadmap 与原 planning 文档维持分工关系：本 roadmap 主管 phase → feature → 接口契约，planning 文档主管学习目标 + 技术选型决策
 
 ## 8. 变更日志
 
-_（new 模式，本节为空；update 时记录改动）_
+- **2026-05-19**：架构方向修订——LLM 摘要从"Roostery 直连外部 LLM（`llm_summary.rs` 是唯一 import 白名单）"改为"**复用已有 §4.3 `Runner` trait + Phase 4 dispatcher 路径**：daily-recap 构造 HookEvent → dispatcher.fire → rules.yaml 路由到用户已装 agent CLI → RunOutcome.stdout 即 summary"。**理由**：Roostery 定位为 vendor-neutral agent broker，自己持有 LLM key / 引 LLM SDK 与该定位冲突；而 `dispatcher-runners` 落地说明已经把"dispatcher 调度 runner"明确为 `runtime-neutral` req 的核心兑现层——daily-recap 走同一路径既复用已建好的全部基础设施（trace / budget / runaway / rules / journal），又把 daily-recap 变成 runtime-neutral 的又一次兑现。**初版误判记录**：起草时本想新增 §4.8 `Summarizer` trait 作为独立契约，user 反馈"通过 agent 调用 roostery 调度其他 agent" 是已有架构后，核对 `runtime-neutral.md` 边界第 1 条与 dispatcher-runners 变更日志确认 dispatcher 复用是正解，§4.8 不引入。**改动**：§2 加全局红线"不引外部 LLM SDK / 不用 HTTP client 直连 LLM endpoint"；§3 Module G 描述改写（去掉"唯一允许 import LLM client"红线，明确走 `dispatcher::fire` + Runner trait）；item 18 slug `report-git-llm → report-recap-engine` + 依赖加 `dispatcher-loop` / `config-yaml` + 备注重写（feature flag 不再涉 reqwest 边界 / 标 hook_source 避 SELF_EVENT_PREFIXES）；item 19 depends_on `report-git-llm → report-recap-engine`；§7 观察项删 "LLM provider 默认家"项 + 加"下游同步三处"项（attention / arch / req）。**受影响 caller**：0（item 18 仍 planned，无 in-progress / done feature 使用旧契约）

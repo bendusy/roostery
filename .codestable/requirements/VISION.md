@@ -11,6 +11,7 @@ _（暂无 current 能力——项目处于 planning 阶段，Rust 重写中，�
 - [Agent 工作过程长在飞书里](agent-work-in-feishu.md) — 让 agent 工具的产出长在你飞书里：不切工具、不交给第三方 dashboard、不重学新界面
 - [不绑 agent runtime 的中立接入](runtime-neutral.md) — 不被某家 agent runtime 绑死：CC / Codex / Gemini / 自己写的都能在同一套飞书面里出活
 - [你的数据在本地——可读、可迁、可换前端](portable-by-default.md) — Roostery 是中立中间件，不是飞书附属：飞书出问题 / 想换平台 / 自建前端都能继续用
+- [自动开发日报](daily-dev-recap.md) — 每天自动把你今天写了啥、和 agent 一起跑了啥总结成人话日报，落进飞书 docx + Base，多设备翻、按周月查都顺手
 
 ## outdated
 

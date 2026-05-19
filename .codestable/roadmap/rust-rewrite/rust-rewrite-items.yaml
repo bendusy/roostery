@@ -138,17 +138,17 @@ items:
     minimal_loop: false
     notes: "Phase 5 Module F 第 3 子 feature。Rust 期 1 子目录 bot_bridge/ 9 文件（含 mod.rs + cli.rs）替代 Python 5 模块。关键决策（design D1-D12 user approved 2026-05-19）：(a) 5 Python 模块合并 1 Rust 子目录按职责切分；(b) HITL 信号通道走进程内 tokio oneshot channel 不落盘 sentinel（Rust 期重新设计代表案例）；(c) runner 调用走 dispatcher::runners::Runner trait + Registry 复用 Phase 4；(d) IM 事件源走 lark-cli im_messages_subscribe 子进程 NDJSON tail + 指数退避重连 cap 60s；(e) ActiveRunnerRegistry 命名避让 dispatcher::runners::RunnerRegistry；(f) ADJUST_MAX=1 const Python parity；(g) 每 BotRole 独立 cache 目录 ~/.roostery/state/bot_chats/{app_id}/。Accepted 2026-05-19（commits 3ccd2a3..dbd2470，570 tests 全过，clippy/fmt 全绿）。明确不做：base_intent_router / --parallel flag / cleanup_orphans / 用户自定义 abort-adjust 关键词 / relay_writer_app_id 跨身份 profile 转向 / POSIX os::kill。req agent-work-in-feishu 兑现用户故事第 4 条（团队成员围观 / 点评 / 接续 IM 群里反向操控 agent）。"
 
-  - slug: report-git-llm
-    description: git_log 多仓聚合 + llm_summary（唯一允许 reqwest 直连外部 LLM 的模块）
-    depends_on: [rust-scaffold]
-    status: planned
-    feature: null
+  - slug: report-recap-engine
+    description: git_log 多仓聚合 + roostery daily-recap 子命令 + 直接调 RunnerRegistry::find(kind).run 委托用户已装 agent CLI；复用 §4.3 Runner trait 但不走 dispatcher::fire；自管 BudgetGuard + JournalEntry；Roostery 不直连 LLM
+    depends_on: [rust-scaffold, dispatcher-runners, dispatcher-trace-budget, journal-core, core-redact, config-yaml]
+    status: done
+    feature: 2026-05-19-report-recap-engine
     minimal_loop: false
-    notes: "Phase 6；Cargo feature flag daily-report 默认开；--no-default-features 必须能剥掉 reqwest"
+    notes: "Phase 6；Cargo feature daily-report 默认开；--no-default-features 剥的是子命令注册 + module 编译（reqwest 整个不被 Roostery 引）；不走 dispatcher::fire（hook-event 分发 vs one-shot string-return 语义不同，详见 design §0 D5 + codex review 留痕）。原 slug report-git-llm 于 2026-05-19 改名。Accepted 2026-05-19——4 轮 codex review + 5 个 design 版本（v1→v5）；落地 crates/roostery/src/daily_recap/ + tests/daily_recap_integration.rs；533 lib tests + 8 integration tests + clippy 双 build mode 全绿；ARCHITECTURE.md §3 Module G + §5.5 + §5.10 (新增) + §6.3 三处归并；attention.md 加 git log exit 128 quirk 一条；req daily-dev-recap 保 draft（待 report-daily 落地后升 current）"
 
   - slug: report-daily
     description: Daily report 主流程 + record_writer（写飞书 docx + Base 记录）
-    depends_on: [report-git-llm, lark-cli-wrapper, journal-core, config-yaml]
+    depends_on: [report-recap-engine, lark-cli-wrapper, journal-core, config-yaml]
     status: planned
     feature: null
     minimal_loop: false

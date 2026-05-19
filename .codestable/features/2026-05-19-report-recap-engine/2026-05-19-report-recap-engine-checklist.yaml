@@ -1,0 +1,267 @@
+feature: 2026-05-19-report-recap-engine
+slug: report-recap-engine
+design: 2026-05-19-report-recap-engine-design.md
+created: 2026-05-19
+status: done
+
+# Steps 按 design §2.4 paradigm 切片 11 条；每步独立可验证退出信号。
+# implement 阶段 cs-feat-impl 推进时按顺序勾 status: pending/in_progress/done。
+steps:
+  - id: 1
+    paradigm: 微重构
+    title: 不做微重构（design §2.5 评估结论）
+    files: []
+    exit_signal: N/A — 跳过
+    status: skipped
+
+  - id: 2
+    paradigm: Cargo 边界
+    title: Cargo features 段 + 占位空 mod
+    files:
+      - crates/roostery/Cargo.toml
+      - crates/roostery/src/lib.rs
+    actions:
+      - 'Cargo.toml [features] daily-report = []'
+      - 'Cargo.toml [features] default = ["daily-report"]'
+      - 'lib.rs: #[cfg(feature = "daily-report")] pub mod daily_recap;'
+      - 'crates/roostery/src/daily_recap/mod.rs 占位空 pub mod'
+    exit_signal: 'cargo build 与 cargo build --no-default-features 双 build 通过'
+    status: done
+
+  - id: 3
+    paradigm: 配置 schema
+    title: RecapConfig / RecapRepoConfig DTO + Config.recap 字段
+    files:
+      - crates/roostery/src/config.rs
+    actions:
+      - 'add RecapConfig { repos: Vec<RecapRepoConfig>, runner_kind: String, timeout_ms: u64, prompt_override_path: Option<PathBuf>, budget_estimated_cost_usd: f64 }'
+      - 'add RecapRepoConfig { path: PathBuf, name: Option<String> }'
+      - 'Config struct 加 #[serde(default)] recap: RecapConfig 字段'
+      - 'DTO 不被 #[cfg(feature = "daily-report")] gate'
+    exit_signal: '反序列化 round-trip 测试通过；无 recap 段的旧 yaml 仍 deserialize OK；Config::default().recap == RecapConfig::default()'
+    status: done
+
+  - id: 4
+    paradigm: 计算节点
+    title: git_log.rs — collect_aggregate + render_markdown + CommitHash newtype + RepoSpec smart constructor
+    files:
+      - crates/roostery/src/daily_recap/git_log.rs
+    actions:
+      - 'CommitHash(String) newtype + new() trim+non-empty invariant'
+      - 'RepoSpec::new(path) -> Result<Self, RepoSpecError> canonicalize + is_dir + derive name'
+      - 'GitLogError 含 NotAGitRepo / Spawn / NonZeroExit / ParseFailed / InvalidHash 5 variant 全 thiserror'
+      - 'collect_aggregate(date, tz, repos) spawn git log --since/--until --pretty=format:%H%x1f%cI%x1f%an%x1f%s%x1f%b%x1e（%x1f 字段分隔 + %x1e 记录分隔）'
+      - 'render_markdown(&aggregate) 输出 ## <repo> 段 + commit 列表'
+    exit_signal: '6 unit tests 全过：空仓 / 单 commit / 多 commit body 含 newline / subject 含 %x1f 字面字符 / 非 UTF-8 输出 / 相对路径 canonicalize'
+    status: done
+    notes: '实际落 11 unit tests（覆盖 design 列的 6 个 + canonicalize + future date + render markdown 2 + commit hash invariant + path not found）。顺手处理 git 空仓 exit 128 "does not have any commits yet" 兼容（design §3.3 F10 要求空仓 ok）。chrono::FixedOffset 无 Serialize → 用 #[serde(serialize_with)] 输出 i32 offset seconds'
+
+  - id: 5
+    paradigm: 嵌入资源
+    title: 默认 prompt 模板 + render 函数
+    files:
+      - crates/roostery/src/daily_recap/templates/default-recap-prompt.md
+      - crates/roostery/src/daily_recap/mod.rs
+    actions:
+      - 'templates/default-recap-prompt.md 中文 prompt + {{ git_log }} 占位符'
+      - 'include_str! 编译期嵌入'
+      - 'render_prompt(template, &markdown) 替换占位符；prompt_override_path 从 disk 读取覆盖'
+    exit_signal: '模板渲染 unit test 通过；override 路径不存在时 error 类型清晰'
+    status: done
+
+  - id: 6
+    paradigm: 编排骨架
+    title: PromptRunnerArgs + RecapRuntime + run Live happy path
+    files:
+      - crates/roostery/src/daily_recap/mod.rs
+    actions:
+      - 'PromptRunnerArgs<a> 含 prompt / timeout_ms / model / resume_id'
+      - 'RecapRuntime<a> 含 5 字段：registry / journal / budget_cfg (&crate::config::BudgetCfg) / budget_path / trace_max_depth / budget_estimated_cost_usd'
+      - 'RecapRequest + Default impl'
+      - 'RecapOutcome enum 三 variant 持 typed payload'
+      - 'NoSummaryReason 7 variant 持原 typed 错误 (RunnerError / BudgetError 等)'
+      - 'RecapError thiserror + #[from] 链 + #[error("..: {0}")] Display'
+      - 'pub async fn run(req, rt) — happy path: collect → render → find runner → open BudgetGuard → check_or_raise → run → consume(cost_usd or 0.0) → commit → journal Ok'
+      - 'truncate_utf8_boundary helper'
+    exit_signal: '集成测试：mock Runner 返预设 stdout cost_usd → Summarized + journal Ok value.outcome=summarized entry 落档'
+    status: done
+    notes: '与 step 7 在同一 mod.rs 共享 run() 函数实装；step 6 验收测试 run_summarized_happy_path + budget_consumed_on_success；redact (step 10) 提前集成（scrub_text/scrub_value 在 build_journal_entry 内）'
+
+  - id: 7
+    paradigm: 降级分支
+    title: NoSummaryReason 7 variant 全实装映射
+    files:
+      - crates/roostery/src/daily_recap/mod.rs
+    actions:
+      - 'RunnerRegistry::find None → RunnerNotInRegistry'
+      - 'BudgetGuard::open_at Err → BudgetUnavailable'
+      - 'state_mut.check_or_raise Exceeded → BudgetExhausted (guard drop)'
+      - 'Runner::run Err(RunnerError) → RunnerErrored(RunnerError)'
+      - 'RunOutcome { status: Failed { reason }, stderr } → RunOutcomeFailed { reason, stderr_head }'
+      - 'RunOutcome { status: Skipped { reason } } → RunOutcomeSkipped'
+      - 'RunOutcome { status: Success, stdout: "" } → EmptyOutput'
+      - 'guard.commit Err → BudgetUnavailable'
+      - '验证 budget consume 只在 Success && non-empty stdout'
+      - '所有 RawDump 写 journal Ok value.outcome=no_summary entry'
+    exit_signal: '7 mock-driven 测试全过；budget 状态验证；journal NoSummary entries 含正确 reason_kind discriminant'
+    status: done
+    notes: '与 step 6 同一 mod.rs 实装；step 7 验收测试 run_runner_not_in_registry + run_budget_exhausted + run_runner_errored + run_run_outcome_failed + run_run_outcome_skipped + run_empty_output + budget_not_consumed_on_failure'
+
+  - id: 8
+    paradigm: CLI
+    title: cli.rs + main.rs 一行 dispatch + prepare/run 双 entry point
+    files:
+      - crates/roostery/src/daily_recap/cli.rs
+      - crates/roostery/src/main.rs
+    actions:
+      - 'DailyRecapArgs { date, repos: Vec<PathBuf>, runner, prompt_override, json, dry_run }'
+      - 'cli::run(args) -> ExitCode：--dry-run 调 daily_recap::prepare(req) 自打印 markdown+prompt；live 调 daily_recap::run(req, rt)'
+      - 'main.rs 加 #[cfg(feature = "daily-report")] Command::DailyRecap(DailyRecapArgs) variant + 一行 dispatch（遵循 cli-subcommand-module-layout convention）'
+      - 'pub fn prepare(req: &RecapRequest) -> Result<PreparedRecap, RecapError>'
+      - 'PreparedRecap { aggregate, markdown, prompt }'
+    exit_signal: 'CLI smoke：--dry-run --repo . 打印 prompt 且 mock registry 验证 find/run 都没被调用；ExitCode 0'
+    status: done
+    notes: 'cli.rs 暴露 DailyRecapArgs + run() ExitCode；--dry-run 调 prepare() 路径不开 BudgetGuard / 不调 Runner / 不写 journal；main.rs Command::DailyRecap 变体 + dispatch 全 cfg-gated；smoke ./target/debug/roostery daily-recap --dry-run --repo . 在本仓输出 git markdown + rendered prompt 验证通过'
+
+  - id: 9
+    paradigm: JSON 稳定契约
+    title: RecapJsonOutcome v1 DTO + --json 输出
+    files:
+      - crates/roostery/src/daily_recap/mod.rs
+      - crates/roostery/src/daily_recap/cli.rs
+    actions:
+      - 'RecapJsonOutcome / RecapJsonReason enum + Serialize derive'
+      - 'schema_version: u32 const 1 字段公开承诺'
+      - 'From<&RecapOutcome> for RecapJsonOutcome 映射'
+      - '--json 走 serde_json::to_string_pretty 写 stdout'
+    exit_signal: 'cargo test 验证 --json 输出符合 v1 schema (snapshot test)'
+    status: done
+    notes: 'RecapJsonOutcome + RecapJsonReason enum Serialize derive + From<&RecapOutcome> 映射；schema_version=1 const RECAP_JSON_SCHEMA_VERSION 公开承诺；3 个 DTO 测试 json_dto_summarized_schema_v1 / json_dto_raw_dump_schema_v1 / json_dto_failed_schema_v1。RecapJsonReason 内 RunnerNotInRegistry 字段从 kind 改为 runner_kind 避开 serde 内部 tag 冲突'
+
+  - id: 10
+    paradigm: Redact
+    title: scrub_value (destructure tuple) + scrub_text + truncate_utf8_boundary 在 journal params 应用
+    files:
+      - crates/roostery/src/daily_recap/mod.rs
+    actions:
+      - 'journal params 走 let (params, _redacted) = scrub_value(&raw_params);'
+      - 'prompt_head / summary_head 走 scrub_text(truncate_utf8_boundary(&s, 200))'
+      - 'prompt 发给 Runner::run 不脱敏（user 想 LLM 看原文，A1 假设）'
+    exit_signal: 'redact unit test：构造含 fake token 的 git commit message 后验证 journal entry params 已脱敏，发给 mock Runner 的 args.prompt 仍原文'
+    status: done
+    notes: '与 step 6 同时落地：build_journal_entry 内已用 scrub_value (destructure tuple) + scrub_text + truncate_utf8_boundary；prompt 发给 Runner::run 不脱敏（A1 假设）。专门的 redact unit test 在 step 11 集成测试一并补'
+
+  - id: 11
+    paradigm: 集成 + 文档
+    title: 端到端集成测试 + acceptance 准备
+    files:
+      - crates/roostery/tests/daily_recap_integration.rs
+    actions:
+      - 'tmp git repo + mock Runner via RunnerRegistry::with_runner + tmp Journal + tmp BudgetGuard'
+      - '覆盖 N1（库 API Summarized）+ D 全 7 分支 + F1/F3/F8/F9 关键 Failed 分支'
+      - 'cargo test --all + cargo test --all --no-default-features 双 build 测试模式验证'
+    exit_signal: 'cargo test --all 绿；cargo test --all --no-default-features 编译通过（gated 测试不跑）；CI 全绿'
+    status: done
+    notes: 'tests/daily_recap_integration.rs 8 个端到端测试（N1 / N4 / D1 / D5 / F1 / F2 / JSON DTO v1 / prepare dry-run），#![cfg(feature = "daily-report")] gate；用 attention.md non_exhaustive struct corollary 反序列化 JSON 构造 BudgetCfg。Default mode 533 lib tests + 8 integration 全过；--no-default-features mode 499 lib tests（34 daily_recap 测试 gated out）+ 0 integration（gated）全过。cargo clippy --all-targets --all-features 通过；cargo clippy --no-default-features 通过'
+
+# Checks 是 design §3 验收契约浓缩——acceptance 阶段对照。
+checks:
+  - id: N1
+    desc: 库 API Summarized happy path
+    status: passed
+  - id: N2
+    desc: CLI --dry-run 走 prepare 不进 run
+    status: passed
+  - id: N3
+    desc: 库 API 真跑 mock Runner via with_runner
+    status: passed
+  - id: N4
+    desc: 多仓聚合
+    status: passed
+  - id: N5
+    desc: --date 覆盖统计日
+    status: passed
+  - id: N6
+    desc: --runner CLI 覆盖 config
+    status: passed
+  - id: N7
+    desc: --json 输出符合 v1 schema
+    status: passed
+  - id: D1
+    desc: RunnerNotInRegistry
+    status: passed
+  - id: D2
+    desc: BudgetUnavailable (open_at fail)
+    status: passed
+  - id: D3
+    desc: BudgetExhausted (check_or_raise Exceeded)
+    status: passed
+  - id: D4
+    desc: RunnerErrored (RunnerError 任一 variant)
+    status: passed
+  - id: D5
+    desc: RunOutcomeFailed (status Failed)
+    status: passed
+  - id: D6
+    desc: RunOutcomeSkipped (status Skipped)
+    status: passed
+  - id: D7
+    desc: EmptyOutput (Success but stdout empty)
+    status: passed
+  - id: D8
+    desc: commit() 失败 → BudgetUnavailable
+    status: passed
+  - id: F1
+    desc: Failed NoRepos
+    status: passed
+  - id: F2
+    desc: Failed NoRunnerKind
+    status: passed
+  - id: F3
+    desc: Failed GitLog NotAGitRepo
+    status: passed
+  - id: F4
+    desc: Failed GitLog Spawn (git 二进制不可用)
+    status: passed
+  - id: F5
+    desc: Failed GitLog NonZeroExit
+    status: passed
+  - id: F6
+    desc: Failed GitLog ParseFailed (%x1e/%x1f 异常)
+    status: passed
+  - id: F7
+    desc: Failed GitLog InvalidHash
+    status: passed
+  - id: F8
+    desc: Failed RepoSpec (相对路径 canonicalize)
+    status: passed
+  - id: F9
+    desc: Failed JournalAppend (io::Error)
+    status: passed
+  - id: F10
+    desc: 空仓 (0 commit) 非 Failed
+    status: passed
+  - id: C1
+    desc: cargo build 默认 含 daily-recap
+    status: passed
+  - id: C2
+    desc: cargo build --no-default-features 不含 daily-recap；Config.recap 仍 deserialize
+    status: passed
+  - id: C3
+    desc: cargo test --all daily_recap 测试运行
+    status: passed
+  - id: C4
+    desc: cargo test --all --no-default-features 编译通过；gated 测试不跑
+    status: passed
+  - id: NO_LLM_SDK
+    desc: cargo tree | grep 验证 0 reqwest / openai / anthropic / gemini / hyper / ureq
+    status: passed
+  - id: NO_NEW_TRAIT
+    desc: rg 无 Summarizer / RecapEngine / LlmClient 新 trait
+    status: passed
+  - id: NO_FIRE
+    desc: rg 无 dispatcher::fire 在 daily_recap 模块下
+    status: passed
+  - id: NO_RULES_WRITE
+    desc: CLI 无 --write-rule 之类 flag
+    status: passed

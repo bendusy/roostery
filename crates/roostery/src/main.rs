@@ -36,6 +36,10 @@ enum Command {
     Dispatcher(DispatcherArgs),
     /// Bot bridge: stop-hook (passive) + push (reverse-call) — Module F.
     Bot(bot_stop_hook::cli::BotArgs),
+    /// Daily recap: aggregate git activity + delegate summarization to user's
+    /// agent CLI (Module G, feature `report-recap-engine`).
+    #[cfg(feature = "daily-report")]
+    DailyRecap(roostery::daily_recap::cli::DailyRecapArgs),
 }
 
 #[derive(Args)]
@@ -137,6 +141,8 @@ fn main() -> ExitCode {
         Some(Command::Init(args)) => run_init(args),
         Some(Command::Dispatcher(args)) => run_dispatcher(args),
         Some(Command::Bot(args)) => bot_stop_hook::cli::run(args),
+        #[cfg(feature = "daily-report")]
+        Some(Command::DailyRecap(args)) => roostery::daily_recap::cli::run(args),
     }
 }
 

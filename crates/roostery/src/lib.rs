@@ -6,6 +6,8 @@ pub mod bot_bridge;
 pub mod bot_stop_hook;
 pub mod bot_task_writer;
 pub mod config;
+#[cfg(feature = "daily-report")]
+pub mod daily_recap;
 pub mod dispatcher;
 pub mod hooks_merge;
 pub mod identity;

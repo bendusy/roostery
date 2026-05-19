@@ -38,6 +38,12 @@ pub struct Config {
     pub trace: TraceConfig,
     #[serde(default)]
     pub journal: JournalConfig,
+    /// Daily-recap section. DTO is always compiled (not behind feature flag)
+    /// so users with `recap:` in their yaml don't break on
+    /// `--no-default-features` builds. See feature
+    /// `2026-05-19-report-recap-engine` design §2.3.
+    #[serde(default)]
+    pub recap: RecapConfig,
 }
 
 impl Default for Config {
@@ -49,6 +55,7 @@ impl Default for Config {
             budgets: Budgets::default(),
             trace: TraceConfig::default(),
             journal: JournalConfig::default(),
+            recap: RecapConfig::default(),
         }
     }
 }
@@ -153,6 +160,36 @@ fn default_journal_dir() -> PathBuf {
 }
 fn default_rotation() -> String {
     "daily".into()
+}
+
+/// Daily-recap configuration (feature `2026-05-19-report-recap-engine`).
+///
+/// All fields default-friendly: empty `repos` / `runner_kind` means user must
+/// override via CLI; `timeout_ms == 0` → engine uses 60000 default; missing
+/// `prompt_override_path` → embedded default prompt. The DTO is compiled
+/// unconditionally so users with a `recap:` section in their yaml don't
+/// break under `--no-default-features` builds.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub struct RecapConfig {
+    #[serde(default)]
+    pub repos: Vec<RecapRepoConfig>,
+    #[serde(default)]
+    pub runner_kind: String,
+    #[serde(default)]
+    pub timeout_ms: u64,
+    #[serde(default)]
+    pub prompt_override_path: Option<PathBuf>,
+    #[serde(default)]
+    pub budget_estimated_cost_usd: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct RecapRepoConfig {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Caller-facing failures.
@@ -331,10 +368,81 @@ runners:
                 dir: PathBuf::from("/custom/journal"),
                 rotation: "size:100".into(),
             },
+            recap: RecapConfig::default(),
         };
         let yaml = serde_yml::to_string(&original).unwrap();
         let parsed: Config = serde_yml::from_str(&yaml).unwrap();
         assert_eq!(parsed, original);
+    }
+
+    // --- recap config tests (feature 2026-05-19-report-recap-engine) ------
+
+    #[test]
+    fn recap_default_empty() {
+        let r = RecapConfig::default();
+        assert!(r.repos.is_empty());
+        assert_eq!(r.runner_kind, "");
+        assert_eq!(r.timeout_ms, 0);
+        assert!(r.prompt_override_path.is_none());
+        assert_eq!(r.budget_estimated_cost_usd, 0.0);
+    }
+
+    #[test]
+    fn recap_missing_section_yields_default() {
+        // Old-style yaml without recap: section still loads (codex P1.6 + design §2.3 boundary).
+        let yaml = r#"
+schema_version: 1
+identity:
+  user_id: ou_legacy
+"#;
+        let cfg: Config = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(cfg.recap, RecapConfig::default());
+    }
+
+    #[test]
+    fn recap_populated_yaml_round_trip() {
+        let yaml = r#"
+schema_version: 1
+recap:
+  repos:
+    - path: /home/u/proj_a
+      name: alpha
+    - path: /home/u/proj_b
+  runner_kind: cc_headless
+  timeout_ms: 90000
+  prompt_override_path: /etc/roostery/custom-recap.md
+  budget_estimated_cost_usd: 0.08
+"#;
+        let cfg: Config = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(cfg.recap.repos.len(), 2);
+        assert_eq!(cfg.recap.repos[0].path, PathBuf::from("/home/u/proj_a"));
+        assert_eq!(cfg.recap.repos[0].name.as_deref(), Some("alpha"));
+        assert_eq!(cfg.recap.repos[1].name, None);
+        assert_eq!(cfg.recap.runner_kind, "cc_headless");
+        assert_eq!(cfg.recap.timeout_ms, 90_000);
+        assert_eq!(
+            cfg.recap.prompt_override_path.as_deref(),
+            Some(Path::new("/etc/roostery/custom-recap.md"))
+        );
+        assert_eq!(cfg.recap.budget_estimated_cost_usd, 0.08);
+
+        // Round-trip
+        let body = serde_yml::to_string(&cfg).unwrap();
+        let reparsed: Config = serde_yml::from_str(&body).unwrap();
+        assert_eq!(reparsed, cfg);
+    }
+
+    #[test]
+    fn recap_partial_yaml_fills_defaults() {
+        let yaml = r#"
+recap:
+  runner_kind: cc_headless
+"#;
+        let cfg: Config = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(cfg.recap.runner_kind, "cc_headless");
+        assert!(cfg.recap.repos.is_empty());
+        assert_eq!(cfg.recap.timeout_ms, 0);
+        assert_eq!(cfg.recap.budget_estimated_cost_usd, 0.0);
     }
 
     // --- load / load_from path tests --------------------------------------

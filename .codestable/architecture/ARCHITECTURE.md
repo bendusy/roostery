@@ -355,8 +355,8 @@ agent run → Feishu task card + step stream + IM thread。**`agent-work-in-feis
 - 引用相关 decisions：`.codestable/compound/2026-05-19-decision-runtime-launch-strategy.md`（tmux default over ACP / direct spawn）、`.codestable/compound/2026-05-18-decision-cli-subcommand-module-layout.md`（cli.rs per-module convention）、`.codestable/compound/2026-05-16-decision-rust-module-organization.md`（500+ 行升档 2 子目录约定，本 feature 9 文件落实）
 
 ### Module G · Reporting（Phase 6）
-日报：git log 聚合 + LLM 摘要 + 写飞书 docx + Base 记录。`llm_summary` 是**唯一**允许 import 外部 LLM client 的模块（架构红线）。Cargo feature flag 控制。
-- 子 feature：`report-git-llm` / `report-daily`
+日报：git log 聚合 + 摘要（通过 §4.3 `Runner` trait + `RunnerRegistry::find(kind).run` 直接委托给用户已装 agent runtime CLI；**Roostery 自身 0 LLM SDK import / 0 reqwest 直连 LLM**——LLM 是用户已装 agent CLI 的副作用）+ 写飞书 docx + Base 记录。Cargo feature flag `daily-report` 控制（默认开；`--no-default-features` 整模块剥）。
+- 子 feature：`report-recap-engine`（accept 2026-05-19；落地于 `crates/roostery/src/daily_recap/`，含 `mod.rs` + `cli.rs` + `git_log.rs` + 嵌入 prompt 模板；4 轮 codex review + 5 个 design 版本敲定 path (c) 直调 RunnerRegistry 不走 dispatcher.fire；533 lib tests + 8 integration tests 全过）/ `report-daily`（消费 `report-recap-engine` 的 `RecapOutcome` 写飞书）
 
 ### Module H · Base Index（Phase 7）
 Feishu Base 作为索引层（**非** source of truth）。
@@ -385,7 +385,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 2. **Feishu = default view，不是 lock-in**。本地是 cache / audit，journal 是 portable 数据形态——飞书出问题 / 想换前端，能基于 journal 重建（兑现 `portable-by-default` req）
 3. **`lark-cli` 是唯一飞书入口**。不允许新增 HTTP client 直连 `open.feishu.cn`
 4. **dispatcher hook-agnostic**。新 hook 源（Codex / Gemini / Cursor）通过 `hooks_merge` + 模板嵌入扩展，loop 不感知 provider
-5. **`llm_summary` 模块是 LLM provider 集成的唯一白名单**。其他模块保持 vendor-neutral
+5. **Roostery 二进制对任意 LLM provider 0 binding**（修订自 feature `2026-05-19-report-recap-engine` 起，原"`llm_summary` 唯一白名单"规约作废）：任何模块都**不允许** import 外部 LLM SDK（OpenAI / Anthropic / Gemini client crate 等）/ 用 `reqwest` / `hyper` / `ureq` 等直连 LLM HTTP endpoint。需要 LLM 能力（daily-recap 等）→ 通过 §4.3 `Runner` trait + `RunnerRegistry::find(kind).run` 委托给用户已装 agent runtime CLI 的子进程，LLM 调用是该子进程的副作用、不是 Roostery 自身 capability
 6. **业务标识符 newtype 隔离**（自 core-remoterefs 起）：对**从飞书侧拿到的、有明确业务语义角色的标识符**（token / id / cursor）一律用 newtype + `#[serde(transparent)]` 隔离类型；不实现互转 `From` impl。Phase 4 dispatcher 的 `TraceId` / `EventId` / `ParentEventId` 是合格候选；**不**适用于"还没成为业务 token 的字符串"（subcommand 名 / 原始 argv / 普通 String 参数）——后者 newtype 化是 noise。详见 `.codestable/compound/` 待归档 convention
 7. **Rust 模块组织五档约定**（自 core-redact / journal-core 起，0.1.0 后由 bot_stop_hook / onboarding 大规模实战验证）：单文件 < 500 行 / 500+ 升档 2 子目录 + `mod.rs` / 独立 crate / Cargo bin target / 资源文件子目录。**主动路径**走 feature `design §2.5` 评估；**回溯路径**走 `cs-audit → cs-refactor`（rustc E0761 禁止 `foo.rs` 与 `foo/mod.rs` 并存，搬运必须原子动作）。详见 `.codestable/compound/2026-05-16-decision-rust-module-organization.md`
 8. **shim / smoke 与 LarkRunner 走三条独立 I/O 路径**（自 lark-cli-shim 起，roostery-smoke 进一步验证）：
@@ -395,6 +395,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 
    三条路径 I/O 语义根本不同（streaming/raw bytes 检文本 vs buffered Value parse JSON），所以**不强行抽公共 trait**；只共享下层 `journal` / `redact` / `remoterefs` / `paths` 模块。下游 read/replay 通过 `JournalEntry.source` 字段（"shim" / "dispatcher" / ...）+ `~/.roostery/state/smoke.json` 状态文件分流
 9. **多 bot daemon + IM HITL 反向控制走进程内 tokio oneshot channel**（自 feature `2026-05-19-bot-bridge-cluster` 落地起）：`bot_bridge::active_registry::ActiveRunnerRegistry` 用 `BTreeMap<TaskGuid, RunnerHandle>` 内存表 + `tokio::sync::oneshot::Sender<HitlSignal>` 给运行中 runner 发 abort / adjust 信号；**不落盘 sentinel 文件**——与 Python 期 `~/.feishu_hub/state/runner_registry/{task_guid}/abort.txt` 跨 process 文件通信对比，Rust 期 runner 与 bridge 在同 tokio runtime 下，oneshot 是 idiom，消除文件 race window 与 ~80 行落盘清理代码。**与 Python 1:1 翻译的偏离代表案例**——印证 "代码-文档优先级"（attention.md）：Python 是 prior baseline 不是应有形态，Rust port 不机械翻译。daemon 重启 ActiveRunnerRegistry 天然清零（不存在 cleanup_orphans 需求）。多 bot daemon 用中央 mpsc 把 per-bot consume_im 流合并到单一 dispatcher loop，**HITL classify 串行先于 spawn handle_event** 是保证 `/stop` 不被并发新 runner 抢先排队的核心顺序约束
+10. **daily-recap 不走 `dispatcher::fire`，直接调 `RunnerRegistry::find(kind).run`**（自 feature `2026-05-19-report-recap-engine` 落地起）：`dispatcher::fire` 是 hook-event 分发 API，返回 dispatch trace 摘要不返业务输出；daily-recap 是 one-shot string-return call（git log → agent CLI 跑 prompt → 拿 summary 文本）。强行复用 fire 要把"事件总览 API"改成"RPC API"，blast radius 不值。新设计 daily-recap 自管 `BudgetGuard`（同 default bucket 共账不竞态）+ 自写 `JournalEntry source="daily_recap"`，**复用 §4.3 Runner trait 抽象但不复用 dispatcher loop**。这是又一次"Rust 期重新设计而非 Python 1:1 翻译"代表案例——Python `daily_report.py` 直接 import openai SDK，Rust 重设计利用现有 Runner adapter 让 LLM 调用 0 SDK binding。落地 `crates/roostery/src/daily_recap/`，4 轮 codex review 留痕在 feature design §0 D5。配套修订红线 §5.5 与 §6.3 删除 `llm_summary` 白名单提法
 
 ## 6. 已知约束 / 硬边界
 
@@ -402,7 +403,7 @@ Feishu Base 作为索引层（**非** source of truth）。
 
 1. **禁止重实现 lark-cli**。飞书 API 必经 `lark_cli` wrapper；不准 `reqwest` / `requests` 打 `open.feishu.cn`，也不引 Feishu SDK。**兑现层**：`crates/roostery/src/lark_cli/`（feature `2026-05-16-lark-cli-wrapper`，commit `cc44dfa`）暴露 `LarkRunner` trait + 三个实现；新模块依赖飞书操作必须 take `Arc<dyn LarkRunner>` / `impl LarkRunner` 注入，禁止直接拼 `Command::new("lark-cli")`（双向引用 `lark_cli/mod.rs` 顶部 docstring）。**装机端兑现链**：feature `2026-05-17-lark-cli-shim` 把 `bin/shim` 装到 `~/.local/bin/lark-cli`（PATH 前段拦截），agent runtime 直接调 `lark-cli` 也被透明截获写 journal 后透传到 real lark-cli——这是同一红线的"客户端绕过路径"封堵，与 wrapper 是同一硬约束的两个兑现层（`crates/roostery/src/bin/shim.rs` 顶部 docstring 反向引用本节）
 2. **本地 state 是 cache 不是真相**。`~/.roostery/`（Rust 期；Python 期 `~/.feishu_hub/`）下任何东西都只是可重放的审计，不回答"任务 X 现在状态如何"
-3. **`llm_summary` 是外部 LLM client import 的唯一允许位置**
+3. **任何模块都不允许 import 外部 LLM SDK / 用 HTTP client 直连 LLM endpoint**（修订自 feature `2026-05-19-report-recap-engine` 起；原"`llm_summary` 唯一白名单"作废）。需要 LLM 能力走 §4.3 Runner trait 委托给用户已装 agent CLI；见 §5 第 5 / 第 10 条详细论证
 4. **lark-cli 版本最低 pin 在 1.0.28**（`task append_task_steps` timestamp schema 兼容）。升级需先跑 smoke。**1.0.29 已实测兼容**（feature `2026-05-17-roostery-smoke` 2026-05-17 跑通 6 条 PROBE_MATRIX）
 5. **smoke 是升级后的 gate**。任意 probe 失败 `roostery init` 和 `daily_report` 拒绝运行。**兑现层**：`crates/roostery/src/smoke.rs::ensure_ready()`（feature `2026-05-17-roostery-smoke`），caller 走 `Result<(), SmokeError>` match 三个具体错误变体（NeverRun / LastFailed / StateLoadFailed）；状态文件 `~/.roostery/state/smoke.json` 含 `lark_cli_version` 字段助升级漂移诊断
 6. **代码-文档优先级**：Python baseline 与最新文档冲突时**以文档为准**（见 attention.md）。Rust port 不机械 1:1 翻译，失配点记观察项
